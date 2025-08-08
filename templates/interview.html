@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Interview in Progress - Mock Interview Practice{% endblock %}
+
+{% block extra_head %}
+<meta name="session-id" content="{{ session_id }}">
+<meta name="tts-voice" content="{{ tts_voice }}">
+<meta name="tts-enabled" content="{{ tts_enabled }}">
+{% endblock %}
+
+{% block header_content %}
+<div class="interview-header">
+    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview</span>
+    {% if company_name %}
+    <span class="company-info">{{ company_name }} {% if role_title %}- {{ role_title }}{% endif %}</span>
+    {% endif %}
+    <button id="end-interview" class="btn btn-danger btn-sm">End Interview</button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="interview-container {% if interview_type == 'technical' %}technical-layout{% else %}full-width-layout{% endif %}">
+    
+    <!-- Main Chat Area -->
+    <div class="chat-section">
+        <div class="chat-header">
+            <h3>💬 Interview Conversation</h3>
+            <div class="status-indicator">
+                <span id="connection-status" class="status-connected">Connected</span>
+                <span id="typing-indicator" class="typing-indicator hidden">Interviewer is typing...</span>
+            </div>
+        </div>
+
+        <div id="chat-messages" class="chat-messages">
+            <!-- Messages will be dynamically added here -->
+        </div>
+
+        <div class="chat-input-section">
+            <div class="input-group">
+                <textarea id="message-input" placeholder="Type your response or use microphone..." 
+                         rows="3" disabled></textarea>
+                <button id="mic-button" class="btn btn-secondary" disabled title="Voice input">
+                    <span class="mic-icon">🎤</span>
+                </button>
+                <button id="whisper-button" class="btn btn-whisper" disabled title="Refine with Whisper (High Accuracy)">
+                    <span class="whisper-icon">🎯</span>
+                </button>
+                <button id="send-button" class="btn btn-primary" disabled>
+                    <span>Send</span>
+                    <span class="send-icon">📤</span>
+                </button>
+            </div>
+            <div id="speech-status" class="speech-status hidden">
+                <span class="listening-indicator">🔴 Listening... Speak now</span>
+            </div>
+            <div class="input-help">
+                <small>💡 Tip: Take your time to think through your responses. Use the microphone button for voice input.</small>
+            </div>
+            <div id="whisper-info" class="whisper-info hidden">
+                <small>ℹ️ <strong>Enhanced Accuracy:</strong> Add OpenAI API key in setup for Whisper transcription</small>
+            </div>
+            
+            <!-- Voice Controls -->
+            <div class="voice-controls">
+                <div class="voice-toggle">
+                    <label>
+                        <input type="checkbox" id="voice-enabled" checked>
+                        <span class="voice-icon">🔊</span> Interviewer Voice (Browser)
+                    </label>
+                </div>
+                <div class="tts-toggle">
+                    <label>
+                        <input type="checkbox" id="tts-enabled">
+                        <span class="tts-icon">🎙️</span> AI Voice (OpenAI TTS)
+                    </label>
+                    <small class="cost-note">💰 Costs: $0.015/1K chars</small>
+                </div>
+                <div class="voice-settings">
+                    <label for="voice-speed">Speed:</label>
+                    <input type="range" id="voice-speed" min="0.5" max="2" step="0.1" value="1">
+                    <span id="speed-value">1.0x</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Coding Section (only for technical interviews) -->
+    {% if interview_type == 'technical' %}
+    <div class="coding-section">
+        <div class="coding-header">
+            <h3>💻 Code Editor</h3>
+            <div class="coding-controls">
+                <button id="run-code" class="btn btn-primary btn-sm">Run Code</button>
+                <button id="clear-code" class="btn btn-secondary btn-sm">Clear</button>
+            </div>
+        </div>
+        <div class="coding-content">
+            <div class="editor-container">
+                <textarea id="code-editor" placeholder="Write your code here..." rows="15"></textarea>
+            </div>
+            <div class="output-container">
+                <div class="output-header">
+                    <h4>Output</h4>
+                    <button id="clear-output" class="btn btn-sm">Clear</button>
+                </div>
+                <div id="code-output" class="code-output">
+                    <div class="output-placeholder">
+                        <p>💡 <strong>Code Editor Ready</strong></p>
+                        <p>Write your code in the editor above and click "Run Code" to execute it.</p>
+                        <p>Supported languages: Python, SQL</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Interview Summary Modal (hidden initially) -->
+<div id="summary-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>📊 Interview Summary</h3>
+            <button id="close-summary" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="summary-content">
+                <!-- Summary will be populated here -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button id="download-summary" class="btn btn-secondary">Download Report</button>
+            <button id="new-interview" class="btn btn-primary">Start New Interview</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/interview.js"></script>
+{% endblock %}
