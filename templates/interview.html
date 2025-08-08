@@ -89,10 +89,14 @@
     <div class="coding-section">
         <div class="coding-header">
             <h3>💻 Code Editor</h3>
-            <div class="coding-controls">
-                <button id="run-code" class="btn btn-primary btn-sm">Run Code</button>
-                <button id="clear-code" class="btn btn-secondary btn-sm">Clear</button>
-            </div>
+                <div class="coding-controls">
+                    <select id="code-language" class="btn btn-secondary btn-sm">
+                        <option value="python" selected>Python</option>
+                        <option value="sql">SQL</option>
+                    </select>
+                    <button id="run-code" class="btn btn-primary btn-sm">Run Code</button>
+                    <button id="clear-code" class="btn btn-secondary btn-sm">Clear</button>
+                </div>
         </div>
         <div class="coding-content">
             <div class="editor-container">

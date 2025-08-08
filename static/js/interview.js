@@ -1168,9 +1168,11 @@ class InterviewChat {
         console.log('Code editor initialized');
     }
 
-    runCode() {
+    async runCode() {
         const codeEditor = document.getElementById('code-editor');
         const codeOutput = document.getElementById('code-output');
+        const langSelect = document.getElementById('code-language');
+        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
         
         if (!codeEditor || !codeOutput) return;
 
@@ -1180,9 +1182,40 @@ class InterviewChat {
             return;
         }
 
-        // For now, just show a placeholder message
-        // In the future, this will connect to a backend code execution service
-        this.showOutput(`Code execution not yet implemented.\n\nYour code:\n${code}\n\nThis will be connected to a Python/SQL execution service in the future.`);
+        // Show spinner entry
+        this.showOutput('⏳ Running...');
+
+        try {
+            const response = await fetch('/api/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ language, code, session_id: this.sessionId })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || `Execution failed (${response.status})`);
+            }
+            const result = await response.json();
+
+            let output = '';
+            if (result.stdout) output += result.stdout + '\n';
+            if (result.stderr) output += (output ? '\n' : '') + '[stderr]\n' + result.stderr + '\n';
+            if (!output.trim()) output = '(no output)';
+            output += `\n\n[${language} • ${result.duration_ms} ms]`;
+
+            if (language === 'sql' && result.table) {
+                const cols = result.table.columns || [];
+                const rows = result.table.rows || [];
+                const header = cols.join(' | ');
+                const sep = cols.map(() => '---').join(' | ');
+                const body = rows.map(r => r.join(' | ')).join('\n');
+                output += `\n\n${header}\n${sep}\n${body}`;
+            }
+
+            this.showOutput(output);
+        } catch (err) {
+            this.showOutput(`❌ ${err.message || err}`);
+        }
     }
 
     showOutput(message) {
