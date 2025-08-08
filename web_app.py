@@ -15,7 +15,7 @@ import json
 import asyncio
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 from openai import OpenAI
         
@@ -41,6 +41,9 @@ from interviewer.multi_agent_system import create_multi_agent_interview_system
 from interviewer.document_parser import create_document_context
 from interviewer.cost_tracker import CostTracker, estimate_tokens_detailed
 from interviewer.core import InterviewContext, CandidateInfo, InterviewPhase
+import subprocess
+import sys
+import tempfile
 
 
 # Initialize FastAPI application
@@ -277,6 +280,134 @@ async def whisper_available():
     api_key = os.getenv("OPENAI_API_KEY")
     return {"available": bool(api_key)}
 
+
+@app.post("/api/execute")
+async def execute_code(request: Request):
+    """
+    Execute code for technical interviews (Phase 1 sandbox):
+    - Python: run in isolated subprocess with timeout
+    - SQL: run in DuckDB in-memory database
+
+    Request JSON: { language: "python"|"sql", code: str, session_id?: str }
+    Response JSON: { success, stdout, stderr, duration_ms, error_type?, table? }
+    """
+    try:
+        body = await request.json()
+        language = (body.get("language") or "").lower().strip()
+        code = body.get("code") or ""
+        session_id = body.get("session_id")
+
+        if not code or language not in {"python", "sql"}:
+            raise HTTPException(status_code=400, detail="Provide language in {python, sql} and non-empty code")
+
+        start_time = time.time()
+
+        if language == "python":
+            # Minimal runner with -I (isolated) to avoid user env/site, timeout capped
+            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
+                tmp.write(code)
+                tmp_path = tmp.name
+
+            try:
+                completed = subprocess.run(
+                    [sys.executable, "-I", "-B", tmp_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                stdout = completed.stdout
+                stderr = completed.stderr
+                rc = completed.returncode
+                success = rc == 0
+                error_type = None if success else "RuntimeError"
+            except subprocess.TimeoutExpired as e:
+                stdout = e.stdout or ""
+                stderr = (e.stderr or "") + "\n[Timed out after 10s]"
+                success = False
+                error_type = "Timeout"
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+            duration_ms = int((time.time() - start_time) * 1000)
+            result = {
+                "success": success,
+                "stdout": (stdout or "")[:10000],
+                "stderr": (stderr or "")[:10000],
+                "duration_ms": duration_ms,
+                "error_type": error_type,
+            }
+
+        else:  # SQL via DuckDB
+            try:
+                import duckdb  # type: ignore
+            except Exception:
+                raise HTTPException(status_code=500, detail="SQL engine not available on server")
+
+            con = duckdb.connect(database=":memory:")
+            # Seed small demo tables
+            con.execute("CREATE TABLE users(id INTEGER, name VARCHAR, country VARCHAR);")
+            con.execute("INSERT INTO users VALUES (1,'Alice','US'),(2,'Bob','CA'),(3,'Carol','US');")
+            con.execute("CREATE TABLE orders(id INTEGER, user_id INTEGER, amount DOUBLE);")
+            con.execute("INSERT INTO orders VALUES (1,1,19.5),(2,1,5.0),(3,2,42.0);")
+
+            stdout = ""
+            stderr = ""
+            table = None
+            success = True
+            error_type = None
+            try:
+                # DuckDB can run multiple statements separated by ; but we will execute as a single script.
+                res = con.execute(code)
+                try:
+                    df = res.df()
+                    # Truncate rows to 200
+                    if len(df) > 200:
+                        df = df.head(200)
+                    table = {
+                        "columns": list(df.columns),
+                        "rows": df.values.tolist(),
+                    }
+                except Exception:
+                    # Non-select statements
+                    stdout = "OK"
+            except Exception as e:
+                success = False
+                error_type = "SQLError"
+                stderr = str(e)
+            finally:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+            duration_ms = int((time.time() - start_time) * 1000)
+            result = {
+                "success": success,
+                "stdout": (stdout or "")[:10000],
+                "stderr": (stderr or "")[:10000],
+                "duration_ms": duration_ms,
+                "error_type": error_type,
+                "table": table,
+            }
+
+        # Optionally store last run in session
+        if session_id and session_id in active_sessions:
+            active_sessions[session_id]["last_run"] = {
+                "language": language,
+                "result": result,
+                "at": datetime.now().isoformat(),
+            }
+
+        return JSONResponse(result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in execute_code: {e}")
+        raise HTTPException(status_code=500, detail="Execution failed")
 
 @app.post("/api/whisper-transcribe")
 async def whisper_transcribe(audio_file: UploadFile = File(...), session_id: str = Form(None)):
