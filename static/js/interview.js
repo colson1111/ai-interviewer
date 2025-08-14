@@ -57,7 +57,6 @@ class InterviewChat {
         this.setupAudioRecording();
         this.setupVoiceSynthesis();
         this.setupCodeEditor();
-        this.lockLanguageIfTrackProvided();
     }
     
     setupWebSocket() {
@@ -1211,26 +1210,17 @@ class InterviewChat {
         console.log('Code editor initialized');
     }
 
-    lockLanguageIfTrackProvided() {
+    getLanguageFromTrack() {
         const metaTrack = document.querySelector('meta[name="technical-track"]');
         const track = metaTrack ? metaTrack.content : '';
-        const langSelect = document.getElementById('code-language');
-        if (!langSelect) return;
-        if (!track) return;
-        if (track === 'sql') {
-            langSelect.value = 'sql';
-            langSelect.disabled = true;
-        } else if (track === 'pandas' || track === 'basic_python' || track === 'algorithms') {
-            langSelect.value = 'python';
-            langSelect.disabled = true;
-        }
+        if (track === 'sql') return 'sql';
+        return 'python';
     }
 
     evaluateSolution() {
         if (!this.ws || !this.isConnected) return;
         const codeEditor = document.getElementById('code-editor');
-        const langSelect = document.getElementById('code-language');
-        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const language = this.getLanguageFromTrack();
         const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
         this.ws.send(JSON.stringify({
             type: 'evaluate_solution',
@@ -1243,8 +1233,7 @@ class InterviewChat {
     async runCode() {
         const codeEditor = document.getElementById('code-editor');
         const codeOutput = document.getElementById('code-output');
-        const langSelect = document.getElementById('code-language');
-        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const language = this.getLanguageFromTrack();
         
         if (!codeEditor || !codeOutput) return;
 
@@ -1307,8 +1296,7 @@ class InterviewChat {
     sendHintRequest(focus) {
         if (!this.ws || !this.isConnected) return;
         const codeEditor = document.getElementById('code-editor');
-        const langSelect = document.getElementById('code-language');
-        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const language = this.getLanguageFromTrack();
         const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
         try {
             this.ws.send(JSON.stringify({
@@ -1363,7 +1351,7 @@ class InterviewChat {
         const codeEditor = document.getElementById('code-editor');
         const langSelect = document.getElementById('code-language');
         if (!codeEditor) return;
-        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const language = this.getLanguageFromTrack();
         const commentPrefix = language === 'sql' ? '-- ' : '# ';
         const commented = problemText
             .split('\n')

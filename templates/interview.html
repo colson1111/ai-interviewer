@@ -91,18 +91,6 @@
         <div class="coding-header">
             <h3>💻 Code Editor</h3>
                 <div class="coding-controls">
-                    <select id="code-language" class="btn btn-secondary btn-sm">
-                        {% if technical_track == 'sql' %}
-                        <option value="sql" selected>SQL</option>
-                        {% elif technical_track == 'pandas' %}
-                        <option value="python" selected>Python</option>
-                        {% elif technical_track == 'algorithms' or technical_track == 'basic_python' %}
-                        <option value="python" selected>Python</option>
-                        {% else %}
-                        <option value="python" selected>Python</option>
-                        <option value="sql">SQL</option>
-                        {% endif %}
-                    </select>
                     <button id="run-code" class="btn btn-primary btn-sm">Run Code</button>
                     <button id="ask-hint" class="btn btn-secondary btn-sm">Ask for hint</button>
                     <button id="explain-error" class="btn btn-secondary btn-sm">Explain error</button>
@@ -155,5 +143,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/interview.js?v=2"></script>
+<script src="/static/js/interview.js?v=3"></script>
 {% endblock %}
