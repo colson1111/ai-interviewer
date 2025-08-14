@@ -57,6 +57,7 @@ class InterviewChat {
         this.setupAudioRecording();
         this.setupVoiceSynthesis();
         this.setupCodeEditor();
+        this.lockLanguageIfTrackProvided();
     }
     
     setupWebSocket() {
@@ -82,6 +83,14 @@ class InterviewChat {
         
         this.ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
+            if (data.type === 'coding_prompt') {
+                try {
+                    this.insertProblemIntoEditor(data.content);
+                } catch (e) {
+                    console.error('Failed to insert coding prompt:', e);
+                }
+                return; // don't let TTS read this
+            }
             this.handleMessage(data);
         };
         
@@ -214,6 +223,12 @@ class InterviewChat {
                 
                 // Speak the interviewer's message
                 this.speakText(data.content);
+                break;
+            case 'coding_prompt':
+                this.insertProblemIntoEditor(data.content);
+                // Also show a tiny confirmation line in chat
+                this.addMessageToChat('interviewer', 'Coding prompt added to the editor.', data.timestamp);
+                this.enableInput();
                 break;
                 
             case 'tool_indicator':
@@ -1129,12 +1144,16 @@ class InterviewChat {
     // Code Editor Methods
     setupCodeEditor() {
         const runCodeBtn = document.getElementById('run-code');
-        const clearCodeBtn = document.getElementById('clear-code');
         const clearOutputBtn = document.getElementById('clear-output');
         const codeEditor = document.getElementById('code-editor');
         const codeOutput = document.getElementById('code-output');
+        const askHintBtn = document.getElementById('ask-hint');
+        const explainErrorBtn = document.getElementById('explain-error');
+        const whatNextBtn = document.getElementById('what-next');
+        const viewSetupBtn = document.getElementById('view-setup');
+        const submitEvalBtn = document.getElementById('submit-eval');
 
-        if (!runCodeBtn || !clearCodeBtn || !clearOutputBtn || !codeEditor || !codeOutput) {
+        if (!runCodeBtn || !clearOutputBtn || !codeEditor || !codeOutput) {
             return; // Code editor not present (non-technical interview)
         }
 
@@ -1143,16 +1162,40 @@ class InterviewChat {
             this.runCode();
         });
 
-        // Clear code button
-        clearCodeBtn.addEventListener('click', () => {
-            codeEditor.value = '';
-            codeEditor.focus();
-        });
-
         // Clear output button
         clearOutputBtn.addEventListener('click', () => {
             this.clearOutput();
         });
+
+        // Hint buttons
+        if (askHintBtn) {
+            askHintBtn.addEventListener('click', () => this.sendHintRequest('problem'));
+        }
+        if (explainErrorBtn) {
+            explainErrorBtn.addEventListener('click', () => this.sendHintRequest('error'));
+        }
+        if (whatNextBtn) {
+            whatNextBtn.addEventListener('click', () => this.sendHintRequest('next'));
+        }
+
+        if (submitEvalBtn) {
+            submitEvalBtn.addEventListener('click', () => this.evaluateSolution());
+        }
+
+        if (viewSetupBtn) {
+            viewSetupBtn.addEventListener('click', async () => {
+                try {
+                    const resp = await fetch(`/api/data-setup?session_id=${this.sessionId}`);
+                    const data = await resp.json();
+                    const blocks = [];
+                    if (data.python_setup) blocks.push(`Python setup:\n\n${data.python_setup}`);
+                    if (data.sql_setup) blocks.push(`SQL setup:\n\n${data.sql_setup}`);
+                    this.showOutput(blocks.join('\n\n') || 'No setup blocks detected. The problem may not include explicit setup.');
+                } catch (e) {
+                    this.showOutput('Could not retrieve data setup.');
+                }
+            });
+        }
 
         // Tab key support for code editor
         codeEditor.addEventListener('keydown', (e) => {
@@ -1166,6 +1209,35 @@ class InterviewChat {
         });
 
         console.log('Code editor initialized');
+    }
+
+    lockLanguageIfTrackProvided() {
+        const metaTrack = document.querySelector('meta[name="technical-track"]');
+        const track = metaTrack ? metaTrack.content : '';
+        const langSelect = document.getElementById('code-language');
+        if (!langSelect) return;
+        if (!track) return;
+        if (track === 'sql') {
+            langSelect.value = 'sql';
+            langSelect.disabled = true;
+        } else if (track === 'pandas' || track === 'basic_python' || track === 'algorithms') {
+            langSelect.value = 'python';
+            langSelect.disabled = true;
+        }
+    }
+
+    evaluateSolution() {
+        if (!this.ws || !this.isConnected) return;
+        const codeEditor = document.getElementById('code-editor');
+        const langSelect = document.getElementById('code-language');
+        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
+        this.ws.send(JSON.stringify({
+            type: 'evaluate_solution',
+            language,
+            code
+        }));
+        this.showTypingIndicator();
     }
 
     async runCode() {
@@ -1213,8 +1285,42 @@ class InterviewChat {
             }
 
             this.showOutput(output);
+
+            // Notify interviewer over WebSocket
+            if (this.ws && this.isConnected) {
+                try {
+             this.ws.send(JSON.stringify({
+                        type: 'code_run',
+                        language,
+                        code,
+                        result
+                    }));
+                } catch (e) {
+                    console.warn('Failed to notify code_run:', e);
+                }
+            }
         } catch (err) {
             this.showOutput(`❌ ${err.message || err}`);
+        }
+    }
+
+    sendHintRequest(focus) {
+        if (!this.ws || !this.isConnected) return;
+        const codeEditor = document.getElementById('code-editor');
+        const langSelect = document.getElementById('code-language');
+        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
+        try {
+            this.ws.send(JSON.stringify({
+                type: 'hint_request',
+                focus,
+                language,
+                code
+            }));
+            // Show typing indicator to hint the user
+            this.showTypingIndicator();
+        } catch (e) {
+            console.warn('Failed to send hint request:', e);
         }
     }
 
@@ -1251,6 +1357,72 @@ class InterviewChat {
                 <p>Supported languages: Python, SQL</p>
             </div>
         `;
+    }
+
+    insertProblemIntoEditor(problemText) {
+        const codeEditor = document.getElementById('code-editor');
+        const langSelect = document.getElementById('code-language');
+        if (!codeEditor) return;
+        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const commentPrefix = language === 'sql' ? '-- ' : '# ';
+        const commented = problemText
+            .split('\n')
+            .map(line => commentPrefix + line)
+            .join('\n');
+        // Build a minimal starter template based on language and any detected signature
+        const template = this.buildTemplateForLanguage(language, problemText);
+        const bundle = commented + '\n\n' + template + '\n';
+        // If editor is empty, place the prompt + template; otherwise prepend with separator
+        const sep = `\n\n${commentPrefix}${'-'.repeat(40)}\n`;
+        codeEditor.value = (codeEditor.value && codeEditor.value.trim().length > 0)
+            ? (bundle + sep + codeEditor.value)
+            : bundle;
+        codeEditor.focus();
+    }
+
+    buildTemplateForLanguage(language, problemText) {
+        if (language === 'sql') {
+            return [
+                '-- Write your SQL below',
+                'SELECT /* columns */',
+                'FROM   /* table */',
+                'WHERE  /* conditions */;',
+            ].join('\n');
+        }
+        // Default Python
+        const signature = this.extractPythonSignature(problemText) || 'def solve(/* args */):';
+        const normalizedSig = signature.endsWith(':') ? signature : signature + ':';
+        return [
+            normalizedSig,
+            '    """Implement your solution here."""',
+            '    pass',
+            '',
+            'if __name__ == "__main__":',
+            '    # TODO: add quick tests',
+            '    pass',
+        ].join('\n');
+    }
+
+    extractPythonSignature(text) {
+        if (!text) return null;
+        // Try code block first
+        const blockMatch = text.match(/```python([\s\S]*?)```/i);
+        if (blockMatch && blockMatch[1]) {
+            const lines = blockMatch[1].split('\n');
+            const defLine = lines.find(l => /\bdef\s+[A-Za-z_]\w*\s*\(/.test(l));
+            if (defLine) return defLine.trim();
+        }
+        // Try a single-line signature anywhere
+        const defMatch = text.match(/def\s+[A-Za-z_]\w*\s*\([^\)]*\)\s*(->\s*[^:\n]+)?\s*:/);
+        if (defMatch) return defMatch[0].trim();
+        // Try to find a line following 'Function Signature:'
+        const sigIdx = text.toLowerCase().indexOf('function signature');
+        if (sigIdx !== -1) {
+            const after = text.slice(sigIdx).split('\n')[0];
+            const inLineDef = after.match(/def\s+[A-Za-z_]\w*\s*\([^\)]*\)\s*(->\s*[^:\n]+)?\s*:?/);
+            if (inLineDef) return inLineDef[0].trim();
+        }
+        return null;
     }
 }
 

@@ -6,11 +6,12 @@
 <meta name="session-id" content="{{ session_id }}">
 <meta name="tts-voice" content="{{ tts_voice }}">
 <meta name="tts-enabled" content="{{ tts_enabled }}">
+{% if technical_track %}<meta name="technical-track" content="{{ technical_track }}">{% endif %}
 {% endblock %}
 
 {% block header_content %}
 <div class="interview-header">
-    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview</span>
+    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview{% if technical_track %} · {{ technical_track.replace('_', ' ').title() }}{% endif %}</span>
     {% if company_name %}
     <span class="company-info">{{ company_name }} {% if role_title %}- {{ role_title }}{% endif %}</span>
     {% endif %}
@@ -91,11 +92,23 @@
             <h3>💻 Code Editor</h3>
                 <div class="coding-controls">
                     <select id="code-language" class="btn btn-secondary btn-sm">
+                        {% if technical_track == 'sql' %}
+                        <option value="sql" selected>SQL</option>
+                        {% elif technical_track == 'pandas' %}
+                        <option value="python" selected>Python</option>
+                        {% elif technical_track == 'algorithms' or technical_track == 'basic_python' %}
+                        <option value="python" selected>Python</option>
+                        {% else %}
                         <option value="python" selected>Python</option>
                         <option value="sql">SQL</option>
+                        {% endif %}
                     </select>
                     <button id="run-code" class="btn btn-primary btn-sm">Run Code</button>
-                    <button id="clear-code" class="btn btn-secondary btn-sm">Clear</button>
+                    <button id="ask-hint" class="btn btn-secondary btn-sm">Ask for hint</button>
+                    <button id="explain-error" class="btn btn-secondary btn-sm">Explain error</button>
+                    <button id="what-next" class="btn btn-secondary btn-sm">What next?</button>
+                    <button id="view-setup" class="btn btn-secondary btn-sm">View data setup</button>
+                    <button id="submit-eval" class="btn btn-primary btn-sm">Submit</button>
                 </div>
         </div>
         <div class="coding-content">
@@ -142,5 +155,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/interview.js"></script>
+<script src="/static/js/interview.js?v=2"></script>
 {% endblock %}

@@ -131,6 +131,22 @@ class InterviewAgent(BaseInterviewAgent):
         Returns:
             AgentResponse with the follow-up question
         """
+        # If technical interview: pivot from intro to a coding challenge after the first user response
+        if context.interview_config.interview_type.value == "technical" and self.current_phase == "introduction":
+            coding_prompt = await self._generate_coding_challenge(context)
+            self.question_count += 1
+            self.last_question_time = time.time()
+            self.current_phase = "coding"
+            return self._create_response(
+                content=coding_prompt,
+                confidence=0.9,
+                metadata={
+                    "question_type": "coding_challenge",
+                    "question_number": self.question_count,
+                    "interview_phase": self.current_phase
+                }
+            )
+
         # Analyze the candidate's response
         response_analysis = self._analyze_candidate_response(message.content)
         
@@ -158,6 +174,30 @@ class InterviewAgent(BaseInterviewAgent):
                 "interview_phase": self.current_phase
             }
         )
+
+    async def _generate_coding_challenge(self, context: InterviewContext) -> str:
+        """
+        Generate a clear coding challenge prompt for technical interviews.
+        The prompt should include: brief problem statement, function signature, input/output examples,
+        constraints, and directions to use the code editor on the right and ask for hints if needed.
+        """
+        interview_type = context.interview_config.interview_type.value
+        tone = context.interview_config.tone.value
+        difficulty = context.interview_config.difficulty.value
+
+        prompt = f"""
+You are conducting a {interview_type} interview with a {tone} tone at {difficulty} difficulty.
+
+Now transition the candidate into a hands-on coding task. Provide:
+- A concise problem statement suitable for a single function implementation
+- A Python function signature the candidate should implement
+- 2-3 example inputs and outputs
+- Key constraints/edge cases
+- A note to write code in the editor panel and that they can ask for hints or explanations
+
+Keep it focused, concrete, and avoid revealing the full solution.
+"""
+        return await self._generate_question_from_prompt(prompt, "coding_challenge")
     
     async def _handle_system_message(self, message: AgentMessage, context: InterviewContext) -> AgentResponse:
         """
@@ -511,8 +551,14 @@ class InterviewAgent(BaseInterviewAgent):
         5. Encourages detailed, specific responses
         
         IMPORTANT: Do NOT use placeholder text like [specific technology] or [programming language]. Instead, reference actual technologies, tools, or concepts they mentioned, or ask about specific aspects of their experience.
-
+        
         If they didn't give enough information for you to ask an intelligent question, ask for more details.
+        
+        TECHNICAL INTERVIEW CONSTRAINTS:
+        - If this is a technical interview (especially during a coding task), DO NOT ask behavioral questions like "Tell me about a time..." or STAR-style prompts.
+        - Focus strictly on the ongoing coding problem, solution correctness, complexity (Big-O), tests, edge cases, and improvements/refactoring.
+        - Prefer short, targeted guidance or questions (e.g., "What is the complexity?", "How would you handle empty input?", "Can you write a quick test?").
+        - If the solution works but is not ideal, ask "How could you improve or optimize this?" rather than any behavioral follow-ups.
         
         Question:"""
         

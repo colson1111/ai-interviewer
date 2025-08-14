@@ -57,7 +57,7 @@ class OrchestratorAgent(BaseInterviewAgent):
             if routing_decision.primary_agent == "search" or "search" in routing_decision.supporting_agents:
                 print(f"########## ORCHESTRATOR: SearchAgent selected - primary: {routing_decision.primary_agent}, supporting: {routing_decision.supporting_agents}")
             
-            # Step 2: Execute agents
+        # Step 2: Execute agents (but constrain by interview type to avoid cross-type drift)
             agent_responses = await self._execute_agents(message, context, routing_decision)
             print(f"########## ORCHESTRATOR: Agent responses collected: {len(agent_responses)}")
             
@@ -122,6 +122,18 @@ class OrchestratorAgent(BaseInterviewAgent):
     ):
         """Enhance routing decision based on context and message."""
         
+        # Force technical interviews to use the dedicated technical agent
+        try:
+            if context.interview_config.interview_type.value == "technical":
+                routing_decision.primary_agent = "technical_interviewer"
+                # Remove general interviewer from supporting agents to avoid long behavioral prompts
+                routing_decision.supporting_agents = [
+                    a for a in routing_decision.supporting_agents if a != "interview"
+                ]
+        except Exception:
+            # If context is missing fields, fail open and continue
+            pass
+
         # Always include feedback agent for user responses
         if (message.message_type.value == "user_response" and 
             "feedback" not in routing_decision.supporting_agents and
@@ -145,6 +157,9 @@ class OrchestratorAgent(BaseInterviewAgent):
         print(f"########## ORCHESTRATOR: Executing agents")
         print(f"########## ORCHESTRATOR: primary={routing_decision.primary_agent}, supporting={routing_decision.supporting_agents}")
         
+        # Restrict agents by interview type for cleaner behavior
+        itype = context.interview_config.interview_type.value
+
         # Execute primary agent
         primary_agent = self.registry.get_agent(routing_decision.primary_agent)
         print(f"########## ORCHESTRATOR: Primary agent found: {primary_agent is not None}")
@@ -161,6 +176,10 @@ class OrchestratorAgent(BaseInterviewAgent):
         
         # Execute supporting agents
         for agent_name in routing_decision.supporting_agents:
+            # For technical interviews, avoid behavioral agent usage by name
+            if itype == "technical" and agent_name in {"interview"}:  # legacy general interviewer
+                # we'll still allow 'search' and 'summary'
+                continue
             agent = self.registry.get_agent(agent_name)
             print(f"########## ORCHESTRATOR: Supporting agent {agent_name} found: {agent is not None}")
             if agent and agent.is_enabled:
@@ -249,11 +268,12 @@ class OrchestratorAgent(BaseInterviewAgent):
             primary_agent=routing_decision.primary_agent,
             contributing_agents=contributing_agents,
             total_confidence=total_confidence,
-            feedback_data=feedback_data,
             metadata={
                 "routing_decision": routing_decision,
-                "response_count": len(agent_responses)
+                "response_count": len(agent_responses),
+                "primary_agent_metadata": (primary_response.metadata if primary_response else {})
             },
+            feedback_data=feedback_data,
             cost_breakdown=cost_breakdown
         )
     

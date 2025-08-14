@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 
-from interviewer.config import LLMConfig, InterviewConfig, LLMProvider, InterviewType, Tone, Difficulty
+from interviewer.config import LLMConfig, InterviewConfig, LLMProvider, InterviewType, Tone, Difficulty, TechnicalTrack
 from interviewer.core import InterviewContext, CandidateInfo
 from interviewer.document_parser import create_document_context
 from interviewer.multi_agent_system import create_multi_agent_interview_system
@@ -48,6 +48,16 @@ import tempfile
 
 # Initialize FastAPI application
 app = FastAPI(title="Mock Interview Practice", version="1.0.0")
+@app.get("/api/data-setup")
+async def get_data_setup(session_id: str):
+    sess = active_sessions.get(session_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+    setups = sess.get("data_setups", {})
+    return {
+        "python_setup": setups.get("python_setup", ""),
+        "sql_setup": setups.get("sql_setup", ""),
+    }
 
 # Static files and templates configuration
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -98,6 +108,7 @@ async def setup_interview(
     interview_type: str = Form(...),
     tone: str = Form(...),
     difficulty: str = Form(...),
+    technical_track: Optional[str] = Form(None),
     tts_voice: str = Form("alloy"),  # Voice selection
     tts_enabled: Optional[str] = Form(None),  # Checkbox (None if unchecked)
     company_name: Optional[str] = Form(None),
@@ -155,7 +166,8 @@ async def setup_interview(
         interview_config = InterviewConfig(
             interview_type=InterviewType(interview_type),
             tone=Tone(tone),
-            difficulty=Difficulty(difficulty)
+            difficulty=Difficulty(difficulty),
+            technical_track=TechnicalTrack(technical_track) if (technical_track and interview_type == 'technical') else None,
         )
         
         # Process uploaded documents
@@ -172,7 +184,9 @@ async def setup_interview(
         candidate_info = CandidateInfo(
             resume_text=resume_text,
             job_description=job_description_text,
-            custom_instructions=custom_instructions
+            custom_instructions=custom_instructions,
+            company_name=company_name,
+            role_title=role_title,
         )
         
         # Create document context for the interview
@@ -302,10 +316,66 @@ async def execute_code(request: Request):
 
         start_time = time.time()
 
+        # Enforce track-language alignment (server-side guard)
+        sess = active_sessions.get(session_id) if session_id else None
+        track = None
+        try:
+            cfg = (sess or {}).get("interview_config")
+            track = getattr(cfg, "technical_track", None)
+            track = track.value if track else None
+        except Exception:
+            track = None
+        if track:
+            if track == "sql" and language != "sql":
+                raise HTTPException(status_code=400, detail="This interview is SQL-only. Switch language to SQL.")
+            if track in {"pandas", "basic_python", "algorithms"} and language != "python":
+                raise HTTPException(status_code=400, detail="This interview is Python-only. Switch language to Python.")
+
         if language == "python":
             # Minimal runner with -I (isolated) to avoid user env/site, timeout capped
+            # Seed pandas DataFrame 'df' from LLM-provided python setup if available
+            from textwrap import dedent
+            prelude = ""
+            try:
+                problem = (sess or {}).get("current_problem", "")
+                # Extract fenced python block
+                import re
+                m = re.search(r"```python\n([\s\S]*?)```", problem)
+                if m:
+                    python_setup = m.group(1)
+                    prelude = dedent(python_setup)
+            except Exception:
+                prelude = ""
+            # Only bootstrap df for pandas/sql tracks. For algorithms/basic_python, run raw code.
+            bootstrap = ""
+            if track in {"pandas", "sql", None}:
+                fallback = dedent(
+                    """
+                    import pandas as pd
+                    import random
+                    random.seed(0)
+                    departments = ['Marketing','Engineering','Sales','Finance','HR']
+                    rows = 60
+                    df = pd.DataFrame({
+                        'employee_id': list(range(1, rows+1)),
+                        'department': [random.choice(departments) for _ in range(rows)],
+                        'salary': [random.randint(40000, 120000) for _ in range(rows)],
+                    })
+                    """
+                )
+                fallback_indented = "\n".join(["    "+line for line in fallback.splitlines()]) + "\n"
+                bootstrap = (
+                    "# Bootstrap df from LLM setup if provided; otherwise fallback\n"
+                    "try:\n"
+                    "    _ = df.shape\n"
+                    "except Exception:\n"
+                    + fallback_indented + "\n"
+                )
             with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
-                tmp.write(code)
+                if bootstrap:
+                    tmp.write(prelude + "\n\n" + bootstrap + "\n\n" + code)
+                else:
+                    tmp.write(prelude + "\n\n" + code)
                 tmp_path = tmp.name
 
             try:
@@ -347,11 +417,47 @@ async def execute_code(request: Request):
                 raise HTTPException(status_code=500, detail="SQL engine not available on server")
 
             con = duckdb.connect(database=":memory:")
-            # Seed small demo tables
-            con.execute("CREATE TABLE users(id INTEGER, name VARCHAR, country VARCHAR);")
-            con.execute("INSERT INTO users VALUES (1,'Alice','US'),(2,'Bob','CA'),(3,'Carol','US');")
-            con.execute("CREATE TABLE orders(id INTEGER, user_id INTEGER, amount DOUBLE);")
-            con.execute("INSERT INTO orders VALUES (1,1,19.5),(2,1,5.0),(3,2,42.0);")
+            # Seed DuckDB table 'tbl' from LLM-provided SQL setup if available; else fallback to synthetic ~50 rows
+            seeded = False
+            try:
+                sess = active_sessions.get(session_id) if session_id else None
+                problem = (sess or {}).get("current_problem", "")
+                import re
+                m = re.search(r"```sql\n([\s\S]*?)```", problem)
+                if m:
+                    sql_setup = m.group(1)
+                    con.execute(sql_setup)
+                    seeded = True
+            except Exception:
+                seeded = False
+            if not seeded:
+                con.execute("CREATE TABLE tbl(employee_id INTEGER, department TEXT, salary INTEGER);")
+                # Insert ~60 random rows with deterministic seed
+                con.execute("PRAGMA threads=1;")
+                con.execute("SET random_seed=42;")
+                con.execute("INSERT INTO tbl SELECT row_number() over () as employee_id, (array_value) as department, CAST(40000 + random()*80000 AS INTEGER) as salary FROM (SELECT UNNEST(['Marketing','Engineering','Sales','Finance','HR']) AS array_value) CROSS JOIN range(12);")
+                # The above generates 5*12 = 60 rows
+
+            # Save setups to session for 'View data setup'
+            try:
+                sess = active_sessions.get(session_id)
+                if sess is not None:
+                    if not sess.get("data_setups"):
+                        sess["data_setups"] = {}
+                    # Store raw blocks if present
+                    import re
+                    py_block = ""
+                    sql_block = ""
+                    mpy = re.search(r"```python\n([\s\S]*?)```", (sess.get("current_problem", "")))
+                    if mpy:
+                        py_block = mpy.group(1)
+                    msql = re.search(r"```sql\n([\s\S]*?)```", (sess.get("current_problem", "")))
+                    if msql:
+                        sql_block = msql.group(1)
+                    sess["data_setups"]["python_setup"] = py_block
+                    sess["data_setups"]["sql_setup"] = sql_block
+            except Exception:
+                pass
 
             stdout = ""
             stderr = ""
@@ -593,6 +699,7 @@ async def interview_page(request: Request, session_id: str):
         "request": request,
         "session_id": session_id,
         "interview_type": session["interview_config"].interview_type.value,
+        "technical_track": (session["interview_config"].technical_track.value if session["interview_config"].technical_track else None),
         "tts_enabled": session.get("tts_enabled", False)
     })
 
@@ -671,12 +778,41 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         )
                         print(f"DEBUG: Combined response: {combined_response}")
                         
-                        # Send interviewer response
-                        await websocket.send_text(json.dumps({
-                            "type": "interviewer",
-                            "content": combined_response["primary_response"].content,
-                            "timestamp": datetime.now().isoformat()
-                        }))
+                        # Send interviewer response, but if this is a coding challenge, place the
+                        # full prompt into the code editor and keep chat concise
+                        primary = combined_response["primary_response"]
+                        # Pull agent metadata (may be nested under primary_agent_metadata)
+                        meta_raw = getattr(primary, "metadata", {}) or {}
+                        agent_meta = meta_raw.get("primary_agent_metadata", {}) if isinstance(meta_raw, dict) else {}
+                        # If not present, also check the top level returned dict's metadata
+                        if not agent_meta:
+                            agent_meta = (combined_response.get("primary_response").metadata or {}).get("primary_agent_metadata", {}) if hasattr(combined_response.get("primary_response"), "metadata") else {}
+
+                        question_type = agent_meta.get("question_type") or meta_raw.get("question_type")
+
+                        if question_type == "coding_challenge":
+                            # Send coding prompt to editor
+                            editor_text = agent_meta.get("editor_prompt") or meta_raw.get("editor_prompt") or primary.content
+                            # Try to extract and cache current problem in session
+                            session["current_problem"] = editor_text
+                            await websocket.send_text(json.dumps({
+                                "type": "coding_prompt",
+                                "content": editor_text,
+                                "timestamp": datetime.now().isoformat()
+                            }))
+
+                            # Brief chat message
+                            await websocket.send_text(json.dumps({
+                                "type": "interviewer",
+                                "content": "Problem added to the editor. Use Run Code and the hint buttons whenever you like.",
+                                "timestamp": datetime.now().isoformat()
+                            }))
+                        else:
+                            await websocket.send_text(json.dumps({
+                                "type": "interviewer",
+                                "content": primary.content,
+                                "timestamp": datetime.now().isoformat()
+                            }))
                         print(f"DEBUG: Sent interviewer response: {combined_response['primary_response'].content}")
                         
                         # Send cost update
@@ -715,6 +851,39 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "timestamp": datetime.now().isoformat()
                     })
                     
+                elif message_data["type"] == "code_run":
+                    # Store last code run (silent by default; no auto-interviewer reply)
+                    code = message_data.get("code", "")
+                    language = message_data.get("language", "")
+                    result = message_data.get("result", {})
+
+                    session["last_code"] = {"language": language, "code": code}
+                    session["last_result"] = result
+                    # Optionally, we could emit a lightweight ack for UI debugging
+                    # await websocket.send_text(json.dumps({"type": "code_ack", "timestamp": datetime.now().isoformat()}))
+
+                elif message_data["type"] == "hint_request":
+                    focus = message_data.get("focus", "problem")
+                    language = message_data.get("language", "")
+                    code = message_data.get("code", "")
+                    try:
+                        # Build a hint prompt
+                        prompt = [
+                            f"The candidate requested a hint focused on: {focus}.",
+                            "Provide a brief, progressive hint (do not reveal full solution).",
+                        ]
+                        if code:
+                            prompt.append(f"Their current {language} code (truncated):\n{code.splitlines()[:30]}")
+                        guidance_input = "\n\n".join(str(p) for p in prompt)
+                        combined_response = await interview_system.process_message(guidance_input, context)
+                        await websocket.send_text(json.dumps({
+                            "type": "interviewer",
+                            "content": combined_response["primary_response"].content,
+                            "timestamp": datetime.now().isoformat()
+                        }))
+                    except Exception as e:
+                        print(f"hint_request failed: {e}")
+
                 elif message_data["type"] == "tts_request":
                     # Handle TTS synthesis request
                     if session.get("tts_enabled", False):

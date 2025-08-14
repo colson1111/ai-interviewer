@@ -57,6 +57,18 @@
                     </select>
                 </div>
 
+                <!-- Technical Track (shown only when technical selected) -->
+                <div class="form-group" id="technical-track-group" style="display:none;">
+                    <label for="technical_track">Technical Track:</label>
+                    <select name="technical_track" id="technical_track">
+                        <option value="pandas">Pandas (DataFrame manipulation)</option>
+                        <option value="sql">SQL (DuckDB)</option>
+                        <option value="basic_python">Basic Python</option>
+                        <option value="algorithms">Algorithms</option>
+                    </select>
+                    <small class="form-help">Choose the focus for this technical interview.</small>
+                </div>
+
                 <div class="form-group">
                     <label for="tone">Interviewer Tone:</label>
                     <select name="tone" id="tone" required>
@@ -206,5 +218,17 @@ document.getElementById('llm_provider').addEventListener('change', function() {
 
 // Trigger initial model population
 document.getElementById('llm_provider').dispatchEvent(new Event('change'));
+
+// Show/hide technical track selector
+const interviewTypeSelect = document.getElementById('interview_type');
+const trackGroup = document.getElementById('technical-track-group');
+function updateTrackVisibility() {
+    if (!interviewTypeSelect || !trackGroup) return;
+    const isTechnical = interviewTypeSelect.value === 'technical';
+    trackGroup.style.display = isTechnical ? '' : 'none';
+}
+interviewTypeSelect.addEventListener('change', updateTrackVisibility);
+// Initialize visibility
+updateTrackVisibility();
 </script>
 {% endblock %}
