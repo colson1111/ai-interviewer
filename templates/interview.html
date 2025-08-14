@@ -85,6 +85,11 @@
         </div>
     </div>
 
+    <!-- Resize handle between chat and coding sections -->
+    {% if interview_type == 'technical' %}
+    <div class="resize-handle-vertical" id="chat-coding-resizer"></div>
+    {% endif %}
+
     <!-- Coding Section (only for technical interviews) -->
     {% if interview_type == 'technical' %}
     <div class="coding-section">
@@ -103,6 +108,8 @@
             <div class="editor-container">
                 <textarea id="code-editor" placeholder="Write your code here..." rows="15"></textarea>
             </div>
+            <!-- Resize handle between editor and output -->
+            <div class="resize-handle-horizontal" id="editor-output-resizer"></div>
             <div class="output-container">
                 <div class="output-header">
                     <h4>Output</h4>
@@ -143,5 +150,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/interview.js?v=3"></script>
+<script src="/static/js/interview.js?v=4"></script>
 {% endblock %}

@@ -57,6 +57,7 @@ class InterviewChat {
         this.setupAudioRecording();
         this.setupVoiceSynthesis();
         this.setupCodeEditor();
+        this.setupResizeHandles();
     }
     
     setupWebSocket() {
@@ -1411,6 +1412,154 @@ class InterviewChat {
             if (inLineDef) return inLineDef[0].trim();
         }
         return null;
+    }
+
+    setupResizeHandles() {
+        // Set up horizontal resize handle (between chat and coding sections)
+        const chatCodingResizer = document.getElementById('chat-coding-resizer');
+        if (chatCodingResizer) {
+            this.setupHorizontalResize(chatCodingResizer);
+        }
+
+        // Set up vertical resize handle (between editor and output)
+        const editorOutputResizer = document.getElementById('editor-output-resizer');
+        if (editorOutputResizer) {
+            this.setupVerticalResize(editorOutputResizer);
+        }
+    }
+
+    setupHorizontalResize(resizer) {
+        let isResizing = false;
+        let startX = 0;
+        let startLeftWidth = 0;
+        let startRightWidth = 0;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startX = e.clientX;
+            
+            const container = resizer.parentElement;
+            const chatSection = container.querySelector('.chat-section');
+            const codingSection = container.querySelector('.coding-section');
+            
+            if (chatSection && codingSection) {
+                startLeftWidth = chatSection.offsetWidth;
+                startRightWidth = codingSection.offsetWidth;
+            }
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            
+            // Prevent text selection during resize
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'col-resize';
+        });
+
+        function onMouseMove(e) {
+            if (!isResizing) return;
+            
+            const container = resizer.parentElement;
+            const totalWidth = container.offsetWidth - 6; // Subtract resizer width
+            const deltaX = e.clientX - startX;
+            
+            // Calculate new widths
+            let leftWidth = startLeftWidth + deltaX;
+            let rightWidth = startRightWidth - deltaX;
+            
+            // Enforce minimum widths
+            const minWidth = 300;
+            if (leftWidth < minWidth) {
+                leftWidth = minWidth;
+                rightWidth = totalWidth - leftWidth;
+            } else if (rightWidth < minWidth) {
+                rightWidth = minWidth;
+                leftWidth = totalWidth - rightWidth;
+            }
+            
+            // Calculate percentages
+            const leftPercent = (leftWidth / totalWidth) * 100;
+            const rightPercent = (rightWidth / totalWidth) * 100;
+            
+            // Update grid template columns
+            container.style.gridTemplateColumns = `${leftPercent}% 6px ${rightPercent}%`;
+        }
+
+        function onMouseUp() {
+            isResizing = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        }
+    }
+
+    setupVerticalResize(resizer) {
+        let isResizing = false;
+        let startY = 0;
+        let startTopHeight = 0;
+        let startBottomHeight = 0;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            
+            const container = resizer.parentElement;
+            const editorContainer = container.querySelector('.editor-container');
+            const outputContainer = container.querySelector('.output-container');
+            
+            if (editorContainer && outputContainer) {
+                startTopHeight = editorContainer.offsetHeight;
+                startBottomHeight = outputContainer.offsetHeight;
+            }
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            
+            // Prevent text selection during resize
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'row-resize';
+        });
+
+        function onMouseMove(e) {
+            if (!isResizing) return;
+            
+            const container = resizer.parentElement;
+            const totalHeight = container.offsetHeight - 6; // Subtract resizer height
+            const deltaY = e.clientY - startY;
+            
+            // Calculate new heights
+            let topHeight = startTopHeight + deltaY;
+            let bottomHeight = startBottomHeight - deltaY;
+            
+            // Enforce minimum heights
+            const minTopHeight = 200;
+            const minBottomHeight = 150;
+            
+            if (topHeight < minTopHeight) {
+                topHeight = minTopHeight;
+                bottomHeight = totalHeight - topHeight;
+            } else if (bottomHeight < minBottomHeight) {
+                bottomHeight = minBottomHeight;
+                topHeight = totalHeight - bottomHeight;
+            }
+            
+            // Update flex basis
+            const editorContainer = container.querySelector('.editor-container');
+            const outputContainer = container.querySelector('.output-container');
+            
+            if (editorContainer && outputContainer) {
+                editorContainer.style.flex = `0 0 ${topHeight}px`;
+                outputContainer.style.flex = `0 0 ${bottomHeight}px`;
+            }
+        }
+
+        function onMouseUp() {
+            isResizing = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        }
     }
 }
 
