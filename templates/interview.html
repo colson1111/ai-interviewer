@@ -6,11 +6,17 @@
 <meta name="session-id" content="{{ session_id }}">
 <meta name="tts-voice" content="{{ tts_voice }}">
 <meta name="tts-enabled" content="{{ tts_enabled }}">
+{% if technical_track %}<meta name="technical-track" content="{{ technical_track }}">{% endif %}
+<!-- Highlight.js for syntax highlighting -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 {% endblock %}
 
 {% block header_content %}
 <div class="interview-header">
-    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview</span>
+    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview{% if technical_track %} · {{ technical_track.replace('_', ' ').title() }}{% endif %}</span>
     {% if company_name %}
     <span class="company-info">{{ company_name }} {% if role_title %}- {{ role_title }}{% endif %}</span>
     {% endif %}
@@ -84,24 +90,31 @@
         </div>
     </div>
 
+    <!-- Resize handle between chat and coding sections -->
+    {% if interview_type == 'technical' %}
+    <div class="resize-handle-vertical" id="chat-coding-resizer"></div>
+    {% endif %}
+
     <!-- Coding Section (only for technical interviews) -->
     {% if interview_type == 'technical' %}
     <div class="coding-section">
         <div class="coding-header">
             <h3>💻 Code Editor</h3>
                 <div class="coding-controls">
-                    <select id="code-language" class="btn btn-secondary btn-sm">
-                        <option value="python" selected>Python</option>
-                        <option value="sql">SQL</option>
-                    </select>
                     <button id="run-code" class="btn btn-primary btn-sm">Run Code</button>
-                    <button id="clear-code" class="btn btn-secondary btn-sm">Clear</button>
+                    <button id="ask-hint" class="btn btn-secondary btn-sm">Ask for hint</button>
+                    <button id="explain-error" class="btn btn-secondary btn-sm">Explain error</button>
+                    <button id="what-next" class="btn btn-secondary btn-sm">What next?</button>
+                    <button id="view-setup" class="btn btn-secondary btn-sm">View data setup</button>
+                    <button id="submit-eval" class="btn btn-primary btn-sm">Submit</button>
                 </div>
         </div>
         <div class="coding-content">
             <div class="editor-container">
                 <textarea id="code-editor" placeholder="Write your code here..." rows="15"></textarea>
             </div>
+            <!-- Resize handle between editor and output -->
+            <div class="resize-handle-horizontal" id="editor-output-resizer"></div>
             <div class="output-container">
                 <div class="output-header">
                     <h4>Output</h4>
@@ -142,5 +155,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/interview.js"></script>
+<script src="/static/js/interview.js?v=7"></script>
 {% endblock %}

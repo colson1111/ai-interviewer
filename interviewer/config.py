@@ -18,6 +18,14 @@ class InterviewType(str, Enum):
     CASE_STUDY = "case_study"    # Hypothetical problem-solving scenarios
 
 
+class TechnicalTrack(str, Enum):
+    """Specific tracks within technical interviews."""
+    PANDAS = "pandas"
+    SQL = "sql"
+    BASIC_PYTHON = "basic_python"
+    ALGORITHMS = "algorithms"
+
+
 class Tone(str, Enum):
     """Available interviewer tones."""
     PROFESSIONAL = "professional"
@@ -78,6 +86,8 @@ class InterviewConfig(BaseModel):
     interview_type: InterviewType = InterviewType.TECHNICAL
     tone: Tone = Tone.PROFESSIONAL
     difficulty: Difficulty = Difficulty.MEDIUM
+    # Only applicable when interview_type == TECHNICAL
+    technical_track: Optional[TechnicalTrack] = None
 
 
 def get_available_models(provider: LLMProvider) -> List[str]:

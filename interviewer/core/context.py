@@ -52,6 +52,8 @@ class CandidateInfo:
     resume_text: str = ""                    # Full text of uploaded resume
     job_description: str = ""                # Full text of job description
     custom_instructions: str = ""            # Custom instructions for the interview
+    company_name: Optional[str] = None        # Optional company name
+    role_title: Optional[str] = None          # Optional specific role title
     
     # Extracted information for quick access
     skills_mentioned: List[str] = field(default_factory=list)      # Skills from resume/job description

@@ -57,6 +57,7 @@ class InterviewChat {
         this.setupAudioRecording();
         this.setupVoiceSynthesis();
         this.setupCodeEditor();
+        this.setupResizeHandles();
     }
     
     setupWebSocket() {
@@ -73,6 +74,9 @@ class InterviewChat {
             this.updateConnectionStatus('Connected', 'connected');
             this.enableInput();
             
+            // Immediately sync TTS settings to ensure initial message uses correct TTS
+            this.syncTtsSettingsOnConnect();
+            
             // Send any queued messages
             while (this.messageQueue.length > 0) {
                 const message = this.messageQueue.shift();
@@ -82,6 +86,14 @@ class InterviewChat {
         
         this.ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
+            if (data.type === 'coding_prompt') {
+                try {
+                    this.insertProblemIntoEditor(data.content, data.question_number);
+                } catch (e) {
+                    console.error('Failed to insert coding prompt:', e);
+                }
+                return; // don't let TTS read this
+            }
             this.handleMessage(data);
         };
         
@@ -214,6 +226,16 @@ class InterviewChat {
                 
                 // Speak the interviewer's message
                 this.speakText(data.content);
+                break;
+            case 'coding_prompt':
+                this.insertProblemIntoEditor(data.content, data.question_number);
+                // Also show a tiny confirmation line in chat
+                this.addMessageToChat('interviewer', 'Coding prompt added to the editor.', data.timestamp);
+                this.enableInput();
+                break;
+                
+            case 'clear_editor':
+                this.clearCodeEditor();
                 break;
                 
             case 'tool_indicator':
@@ -1101,6 +1123,49 @@ class InterviewChat {
         return html || '<span class="no-costs">No costs yet</span>';
     }
     
+    // Sync TTS settings immediately when WebSocket connects
+    async syncTtsSettingsOnConnect() {
+        try {
+            // Get TTS settings from meta tags (set by server)
+            const ttsEnabled = document.querySelector('meta[name="tts-enabled"]')?.content === 'True';
+            const ttsVoice = document.querySelector('meta[name="tts-voice"]')?.content || 'alloy';
+            
+            console.log('Syncing TTS settings on connect:', { ttsEnabled, ttsVoice });
+            
+            // Update local state
+            this.ttsEnabled = ttsEnabled;
+            if (this.ttsToggle) {
+                this.ttsToggle.checked = ttsEnabled;
+            }
+            
+            // Send TTS settings to server and wait for it to complete
+            try {
+                await this.updateSessionTtsSetting(ttsEnabled);
+                console.log('TTS settings synchronized successfully');
+            } catch (error) {
+                console.error('Failed to sync TTS settings on connect:', error);
+            }
+            
+            // After TTS is synced, tell server client is ready for initial message
+            this.sendClientReady();
+        } catch (error) {
+            console.error('Error syncing TTS settings on connect:', error);
+            // Still send client ready even if TTS sync fails
+            this.sendClientReady();
+        }
+    }
+
+    // Send client ready signal to receive initial message with correct TTS
+    sendClientReady() {
+        if (this.ws && this.isConnected) {
+            console.log('Sending client ready signal');
+            this.ws.send(JSON.stringify({
+                type: 'client_ready',
+                timestamp: new Date().toISOString()
+            }));
+        }
+    }
+
     // Update TTS setting on server
     async updateSessionTtsSetting(enabled) {
         try {
@@ -1129,12 +1194,16 @@ class InterviewChat {
     // Code Editor Methods
     setupCodeEditor() {
         const runCodeBtn = document.getElementById('run-code');
-        const clearCodeBtn = document.getElementById('clear-code');
         const clearOutputBtn = document.getElementById('clear-output');
         const codeEditor = document.getElementById('code-editor');
         const codeOutput = document.getElementById('code-output');
+        const askHintBtn = document.getElementById('ask-hint');
+        const explainErrorBtn = document.getElementById('explain-error');
+        const whatNextBtn = document.getElementById('what-next');
+        const viewSetupBtn = document.getElementById('view-setup');
+        const submitEvalBtn = document.getElementById('submit-eval');
 
-        if (!runCodeBtn || !clearCodeBtn || !clearOutputBtn || !codeEditor || !codeOutput) {
+        if (!runCodeBtn || !clearOutputBtn || !codeEditor || !codeOutput) {
             return; // Code editor not present (non-technical interview)
         }
 
@@ -1143,16 +1212,40 @@ class InterviewChat {
             this.runCode();
         });
 
-        // Clear code button
-        clearCodeBtn.addEventListener('click', () => {
-            codeEditor.value = '';
-            codeEditor.focus();
-        });
-
         // Clear output button
         clearOutputBtn.addEventListener('click', () => {
             this.clearOutput();
         });
+
+        // Hint buttons
+        if (askHintBtn) {
+            askHintBtn.addEventListener('click', () => this.sendHintRequest('problem'));
+        }
+        if (explainErrorBtn) {
+            explainErrorBtn.addEventListener('click', () => this.sendHintRequest('error'));
+        }
+        if (whatNextBtn) {
+            whatNextBtn.addEventListener('click', () => this.sendHintRequest('next'));
+        }
+
+        if (submitEvalBtn) {
+            submitEvalBtn.addEventListener('click', () => this.evaluateSolution());
+        }
+
+        if (viewSetupBtn) {
+            viewSetupBtn.addEventListener('click', async () => {
+                try {
+                    const resp = await fetch(`/api/data-setup?session_id=${this.sessionId}`);
+                    const data = await resp.json();
+                    const blocks = [];
+                    if (data.python_setup) blocks.push(`Python setup:\n\n${data.python_setup}`);
+                    if (data.sql_setup) blocks.push(`SQL setup:\n\n${data.sql_setup}`);
+                    this.showOutput(blocks.join('\n\n') || 'No setup blocks detected. The problem may not include explicit setup.');
+                } catch (e) {
+                    this.showOutput('Could not retrieve data setup.');
+                }
+            });
+        }
 
         // Tab key support for code editor
         codeEditor.addEventListener('keydown', (e) => {
@@ -1165,14 +1258,234 @@ class InterviewChat {
             }
         });
 
+        // Set up syntax highlighting
+        this.setupSyntaxHighlighting(codeEditor);
+
         console.log('Code editor initialized');
+    }
+
+    getLanguageFromTrack() {
+        const metaTrack = document.querySelector('meta[name="technical-track"]');
+        const track = metaTrack ? metaTrack.content : '';
+        if (track === 'sql') return 'sql';
+        return 'python';
+    }
+
+    setupSyntaxHighlighting(editor) {
+        // Force disable spellcheck via HTML attributes (more reliable than CSS)
+        editor.setAttribute('spellcheck', 'false');
+        editor.setAttribute('autocomplete', 'off');
+        editor.setAttribute('autocorrect', 'off');
+        editor.setAttribute('autocapitalize', 'off');
+        
+        // Remove any existing overlays that might cause issues
+        const existingOverlay = editor.parentNode.querySelector('.pandas-highlight-overlay');
+        if (existingOverlay) {
+            existingOverlay.remove();
+        }
+        
+        // Set up smart highlighting with better performance
+        this.setupSmartHighlighting(editor);
+        this.setupSyntaxHighlighting2(editor);
+        
+        console.log('Code editor styled with enhanced syntax highlighting and spellcheck disabled');
+    }
+
+    setupSyntaxHighlighting2(editor) {
+        // Add language-specific CSS class based on current track
+        const track = this.getLanguageFromTrack();
+        editor.classList.add(`code-${track}`);
+        
+        // Create a simple syntax highlighter
+        const highlightCode = () => {
+            const code = editor.value;
+            if (!code.trim()) return;
+            
+            // Simple keyword highlighting via text selection hints
+            this.addSyntaxHints(editor, code, track);
+        };
+        
+        // Add event listeners for real-time highlighting
+        editor.addEventListener('input', highlightCode);
+        editor.addEventListener('keyup', highlightCode);
+        
+        // Initial highlighting
+        highlightCode();
+    }
+
+    addSyntaxHints(editor, code, language) {
+        // Add subtle visual cues for syntax elements
+        const lines = code.split('\n');
+        let hasKeywords = false;
+        
+        if (language === 'python') {
+            const pythonKeywords = ['def', 'import', 'from', 'if', 'else', 'for', 'while', 'return', 'class', 'try', 'except', 'with', 'as'];
+            hasKeywords = pythonKeywords.some(keyword => code.includes(keyword));
+        } else if (language === 'sql') {
+            const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP BY', 'ORDER BY', 'INSERT', 'UPDATE', 'DELETE'];
+            hasKeywords = sqlKeywords.some(keyword => code.toUpperCase().includes(keyword));
+        }
+        
+        // Subtle border color change to indicate syntax recognition
+        if (hasKeywords) {
+            editor.style.borderColor = '#58a6ff';
+            setTimeout(() => {
+                editor.style.borderColor = '#30363d';
+            }, 1000);
+        }
+    }
+
+    setupSmartHighlighting(editor) {
+        // Create a lightweight highlighting system using textarea selection
+        const container = editor.parentNode;
+        
+        // Add event listeners for real-time highlighting hints
+        editor.addEventListener('input', () => this.updateSmartHighlighting(editor));
+        editor.addEventListener('keyup', () => this.updateSmartHighlighting(editor));
+        editor.addEventListener('focus', () => this.showSyntaxHints(editor));
+        
+        // Initial highlighting
+        this.updateSmartHighlighting(editor);
+    }
+
+    updateSmartHighlighting(editor) {
+        const code = editor.value;
+        if (!code.trim()) return;
+        
+        // Smart bracket matching and indentation assistance
+        this.assistBracketMatching(editor);
+        this.assistPandasCompletion(editor);
+    }
+
+    assistBracketMatching(editor) {
+        const cursorPos = editor.selectionStart;
+        const code = editor.value;
+        const char = code[cursorPos - 1];
+        
+        // Flash matching brackets briefly
+        if (['(', ')', '[', ']', '{', '}'].includes(char)) {
+            editor.style.transition = 'box-shadow 0.2s ease';
+            editor.style.boxShadow = '0 0 8px rgba(100, 149, 237, 0.5)';
+            setTimeout(() => {
+                editor.style.boxShadow = 'none';
+            }, 200);
+        }
+    }
+
+    assistPandasCompletion(editor) {
+        const cursorPos = editor.selectionStart;
+        const code = editor.value;
+        const lineStart = code.lastIndexOf('\n', cursorPos - 1) + 1;
+        const currentLine = code.substring(lineStart, cursorPos);
+        
+        // Show subtle visual feedback for pandas operations
+        if (currentLine.includes('df.') || currentLine.includes('pd.')) {
+            editor.style.borderColor = '#a5d6ff';
+            setTimeout(() => {
+                editor.style.borderColor = '#30363d';
+            }, 1000);
+        }
+    }
+
+    showSyntaxHints(editor) {
+        // Create a tooltip with pandas shortcuts
+        this.createSyntaxTooltip(editor);
+    }
+
+    createSyntaxTooltip(editor) {
+        // Remove existing tooltip
+        const existingTooltip = document.querySelector('.pandas-tooltip');
+        if (existingTooltip) {
+            existingTooltip.remove();
+        }
+        
+        const tooltip = document.createElement('div');
+        tooltip.className = 'pandas-tooltip';
+        tooltip.style.cssText = `
+            position: absolute;
+            top: -40px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #e6edf3;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: 'Fira Code', monospace;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            white-space: nowrap;
+            border: 1px solid #30363d;
+        `;
+        
+        tooltip.innerHTML = `
+            <span style="color: #a5d6ff;">df</span><span style="color: #d2a8ff;">.head()</span> | 
+            <span style="color: #a5d6ff;">df</span><span style="color: #d2a8ff;">.groupby()</span> | 
+            <span style="color: #ffa657;">pd.DataFrame()</span>
+        `;
+        
+        editor.parentNode.style.position = 'relative';
+        editor.parentNode.appendChild(tooltip);
+        
+        // Fade in
+        setTimeout(() => {
+            tooltip.style.opacity = '1';
+        }, 100);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (tooltip.parentNode) {
+                tooltip.style.opacity = '0';
+                setTimeout(() => {
+                    if (tooltip.parentNode) {
+                        tooltip.remove();
+                    }
+                }, 300);
+            }
+        }, 3000);
+    }
+
+    updatePandasHighlighting() {
+        // Smart highlighting is now handled by the new system
+        const editor = document.getElementById('code-editor');
+        if (editor) {
+            this.updateSmartHighlighting(editor);
+        }
+    }
+
+    updateSyntaxHighlighting() {
+        // Delegate to the enhanced highlighting system
+        this.updatePandasHighlighting();
+    }
+
+    evaluateSolution() {
+        if (!this.ws || !this.isConnected) return;
+        const codeEditor = document.getElementById('code-editor');
+        const language = this.getLanguageFromTrack();
+        const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
+        
+        if (!code.trim()) {
+            this.showOutput('Please write some code before submitting for evaluation.');
+            return;
+        }
+        
+        // Show loading state
+        this.showOutput('🔄 Evaluating your solution...\n\nThe interviewer is reviewing your code and will provide detailed feedback.');
+        
+        this.ws.send(JSON.stringify({
+            type: 'evaluate_solution',
+            language,
+            code,
+            timestamp: new Date().toISOString()
+        }));
+        this.showTypingIndicator();
     }
 
     async runCode() {
         const codeEditor = document.getElementById('code-editor');
         const codeOutput = document.getElementById('code-output');
-        const langSelect = document.getElementById('code-language');
-        const language = (langSelect && langSelect.value) ? langSelect.value : 'python';
+        const language = this.getLanguageFromTrack();
         
         if (!codeEditor || !codeOutput) return;
 
@@ -1213,8 +1526,41 @@ class InterviewChat {
             }
 
             this.showOutput(output);
+
+            // Notify interviewer over WebSocket
+            if (this.ws && this.isConnected) {
+                try {
+             this.ws.send(JSON.stringify({
+                        type: 'code_run',
+                        language,
+                        code,
+                        result
+                    }));
+                } catch (e) {
+                    console.warn('Failed to notify code_run:', e);
+                }
+            }
         } catch (err) {
             this.showOutput(`❌ ${err.message || err}`);
+        }
+    }
+
+    sendHintRequest(focus) {
+        if (!this.ws || !this.isConnected) return;
+        const codeEditor = document.getElementById('code-editor');
+        const language = this.getLanguageFromTrack();
+        const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
+        try {
+            this.ws.send(JSON.stringify({
+                type: 'hint_request',
+                focus,
+                language,
+                code
+            }));
+            // Show typing indicator to hint the user
+            this.showTypingIndicator();
+        } catch (e) {
+            console.warn('Failed to send hint request:', e);
         }
     }
 
@@ -1251,6 +1597,276 @@ class InterviewChat {
                 <p>Supported languages: Python, SQL</p>
             </div>
         `;
+    }
+
+    clearCodeEditor() {
+        const codeEditor = document.getElementById('code-editor');
+        if (codeEditor) {
+            codeEditor.value = '';
+            console.log('DEBUG: Code editor cleared');
+        }
+    }
+
+    insertProblemIntoEditor(problemText, questionNumber = 1) {
+        console.log('DEBUG: insertProblemIntoEditor called with questionNumber:', questionNumber);
+        const codeEditor = document.getElementById('code-editor');
+        if (!codeEditor) return;
+        const language = this.getLanguageFromTrack();
+        const commentPrefix = language === 'sql' ? '-- ' : '# ';
+        
+        // Extract just the challenge question (remove data setup sections)
+        const cleanProblem = this.extractChallengeOnly(problemText);
+        
+        const commented = cleanProblem
+            .split('\n')
+            .map(line => commentPrefix + line)
+            .join('\n');
+        
+        // Add simple data preview code
+        let previewCode = '';
+        if (language === 'python') {
+            previewCode = 'print(df.head())';
+        } else if (language === 'sql') {
+            previewCode = 'SELECT * FROM tbl LIMIT 5;';
+        }
+        
+        const bundle = commented + '\n\n' + previewCode + '\n';
+        
+        // Always populate the editor with the new challenge
+        // (Clearing is now handled separately by clear_editor message)
+        console.log('DEBUG: Populating editor with new challenge');
+        codeEditor.value = bundle;
+        codeEditor.focus();
+        
+        // Update pandas syntax highlighting
+        setTimeout(() => this.updatePandasHighlighting(), 0);
+    }
+
+    extractChallengeOnly(text) {
+        // Look for ### Challenge Description section and extract just that
+        const lines = text.split('\n');
+        let challengeLines = [];
+        let inChallenge = false;
+        let inCodeBlock = false;
+        
+        for (let line of lines) {
+            // Detect fenced code blocks
+            if (line.trim().startsWith('```')) {
+                inCodeBlock = !inCodeBlock;
+                // Stop collecting challenge lines when we hit a code block
+                if (inCodeBlock && inChallenge) {
+                    break;
+                }
+                continue;
+            }
+            
+            // Skip content inside code blocks
+            if (inCodeBlock) continue;
+            
+            // Start collecting when we see Challenge Description
+            if (line.includes('### Challenge Description') || line.includes('Challenge Description')) {
+                inChallenge = true;
+                continue; // Skip the header line itself
+            }
+            
+            // Collect challenge description lines
+            if (inChallenge && line.trim().length > 0) {
+                challengeLines.push(line);
+            }
+        }
+        
+        let result = challengeLines.join('\n').trim();
+        
+        // If we didn't find a challenge section, try to extract the first meaningful content
+        if (!result || result.length < 10) {
+            // Look for the first non-header, non-code content
+            for (let line of lines) {
+                if (line.trim().startsWith('```') || line.trim().startsWith('#')) continue;
+                if (line.trim().length > 20) {
+                    result = line.trim();
+                    break;
+                }
+            }
+        }
+        
+        // Final fallback
+        if (!result || result.length < 10) {
+            result = "Complete the data analysis task using the provided dataset.";
+        }
+        
+        return result;
+    }
+
+
+
+    extractPythonSignature(text) {
+        if (!text) return null;
+        // Try code block first
+        const blockMatch = text.match(/```python([\s\S]*?)```/i);
+        if (blockMatch && blockMatch[1]) {
+            const lines = blockMatch[1].split('\n');
+            const defLine = lines.find(l => /\bdef\s+[A-Za-z_]\w*\s*\(/.test(l));
+            if (defLine) return defLine.trim();
+        }
+        // Try a single-line signature anywhere
+        const defMatch = text.match(/def\s+[A-Za-z_]\w*\s*\([^\)]*\)\s*(->\s*[^:\n]+)?\s*:/);
+        if (defMatch) return defMatch[0].trim();
+        // Try to find a line following 'Function Signature:'
+        const sigIdx = text.toLowerCase().indexOf('function signature');
+        if (sigIdx !== -1) {
+            const after = text.slice(sigIdx).split('\n')[0];
+            const inLineDef = after.match(/def\s+[A-Za-z_]\w*\s*\([^\)]*\)\s*(->\s*[^:\n]+)?\s*:?/);
+            if (inLineDef) return inLineDef[0].trim();
+        }
+        return null;
+    }
+
+    setupResizeHandles() {
+        // Set up horizontal resize handle (between chat and coding sections)
+        const chatCodingResizer = document.getElementById('chat-coding-resizer');
+        if (chatCodingResizer) {
+            this.setupHorizontalResize(chatCodingResizer);
+        }
+
+        // Set up vertical resize handle (between editor and output)
+        const editorOutputResizer = document.getElementById('editor-output-resizer');
+        if (editorOutputResizer) {
+            this.setupVerticalResize(editorOutputResizer);
+        }
+    }
+
+    setupHorizontalResize(resizer) {
+        let isResizing = false;
+        let startX = 0;
+        let startLeftWidth = 0;
+        let startRightWidth = 0;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startX = e.clientX;
+            
+            const container = resizer.parentElement;
+            const chatSection = container.querySelector('.chat-section');
+            const codingSection = container.querySelector('.coding-section');
+            
+            if (chatSection && codingSection) {
+                startLeftWidth = chatSection.offsetWidth;
+                startRightWidth = codingSection.offsetWidth;
+            }
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            
+            // Prevent text selection during resize
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'col-resize';
+        });
+
+        function onMouseMove(e) {
+            if (!isResizing) return;
+            
+            const container = resizer.parentElement;
+            const totalWidth = container.offsetWidth - 6; // Subtract resizer width
+            const deltaX = e.clientX - startX;
+            
+            // Calculate new widths
+            let leftWidth = startLeftWidth + deltaX;
+            let rightWidth = startRightWidth - deltaX;
+            
+            // Enforce minimum widths
+            const minWidth = 300;
+            if (leftWidth < minWidth) {
+                leftWidth = minWidth;
+                rightWidth = totalWidth - leftWidth;
+            } else if (rightWidth < minWidth) {
+                rightWidth = minWidth;
+                leftWidth = totalWidth - rightWidth;
+            }
+            
+            // Calculate percentages
+            const leftPercent = (leftWidth / totalWidth) * 100;
+            const rightPercent = (rightWidth / totalWidth) * 100;
+            
+            // Update grid template columns
+            container.style.gridTemplateColumns = `${leftPercent}% 6px ${rightPercent}%`;
+        }
+
+        function onMouseUp() {
+            isResizing = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        }
+    }
+
+    setupVerticalResize(resizer) {
+        let isResizing = false;
+        let startY = 0;
+        let startTopHeight = 0;
+        let startBottomHeight = 0;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            
+            const container = resizer.parentElement;
+            const editorContainer = container.querySelector('.editor-container');
+            const outputContainer = container.querySelector('.output-container');
+            
+            if (editorContainer && outputContainer) {
+                startTopHeight = editorContainer.offsetHeight;
+                startBottomHeight = outputContainer.offsetHeight;
+            }
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            
+            // Prevent text selection during resize
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'row-resize';
+        });
+
+        function onMouseMove(e) {
+            if (!isResizing) return;
+            
+            const container = resizer.parentElement;
+            const totalHeight = container.offsetHeight - 6; // Subtract resizer height
+            const deltaY = e.clientY - startY;
+            
+            // Calculate new heights
+            let topHeight = startTopHeight + deltaY;
+            let bottomHeight = startBottomHeight - deltaY;
+            
+            // Enforce minimum heights
+            const minTopHeight = 200;
+            const minBottomHeight = 150;
+            
+            if (topHeight < minTopHeight) {
+                topHeight = minTopHeight;
+                bottomHeight = totalHeight - topHeight;
+            } else if (bottomHeight < minBottomHeight) {
+                bottomHeight = minBottomHeight;
+                topHeight = totalHeight - bottomHeight;
+            }
+            
+            // Update flex basis
+            const editorContainer = container.querySelector('.editor-container');
+            const outputContainer = container.querySelector('.output-container');
+            
+            if (editorContainer && outputContainer) {
+                editorContainer.style.flex = `0 0 ${topHeight}px`;
+                outputContainer.style.flex = `0 0 ${bottomHeight}px`;
+            }
+        }
+
+        function onMouseUp() {
+            isResizing = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        }
     }
 }
 
