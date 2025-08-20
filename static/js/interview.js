@@ -74,6 +74,9 @@ class InterviewChat {
             this.updateConnectionStatus('Connected', 'connected');
             this.enableInput();
             
+            // Immediately sync TTS settings to ensure initial message uses correct TTS
+            this.syncTtsSettingsOnConnect();
+            
             // Send any queued messages
             while (this.messageQueue.length > 0) {
                 const message = this.messageQueue.shift();
@@ -85,7 +88,7 @@ class InterviewChat {
             const data = JSON.parse(event.data);
             if (data.type === 'coding_prompt') {
                 try {
-                    this.insertProblemIntoEditor(data.content);
+                    this.insertProblemIntoEditor(data.content, data.question_number);
                 } catch (e) {
                     console.error('Failed to insert coding prompt:', e);
                 }
@@ -225,10 +228,14 @@ class InterviewChat {
                 this.speakText(data.content);
                 break;
             case 'coding_prompt':
-                this.insertProblemIntoEditor(data.content);
+                this.insertProblemIntoEditor(data.content, data.question_number);
                 // Also show a tiny confirmation line in chat
                 this.addMessageToChat('interviewer', 'Coding prompt added to the editor.', data.timestamp);
                 this.enableInput();
+                break;
+                
+            case 'clear_editor':
+                this.clearCodeEditor();
                 break;
                 
             case 'tool_indicator':
@@ -1116,6 +1123,49 @@ class InterviewChat {
         return html || '<span class="no-costs">No costs yet</span>';
     }
     
+    // Sync TTS settings immediately when WebSocket connects
+    async syncTtsSettingsOnConnect() {
+        try {
+            // Get TTS settings from meta tags (set by server)
+            const ttsEnabled = document.querySelector('meta[name="tts-enabled"]')?.content === 'True';
+            const ttsVoice = document.querySelector('meta[name="tts-voice"]')?.content || 'alloy';
+            
+            console.log('Syncing TTS settings on connect:', { ttsEnabled, ttsVoice });
+            
+            // Update local state
+            this.ttsEnabled = ttsEnabled;
+            if (this.ttsToggle) {
+                this.ttsToggle.checked = ttsEnabled;
+            }
+            
+            // Send TTS settings to server and wait for it to complete
+            try {
+                await this.updateSessionTtsSetting(ttsEnabled);
+                console.log('TTS settings synchronized successfully');
+            } catch (error) {
+                console.error('Failed to sync TTS settings on connect:', error);
+            }
+            
+            // After TTS is synced, tell server client is ready for initial message
+            this.sendClientReady();
+        } catch (error) {
+            console.error('Error syncing TTS settings on connect:', error);
+            // Still send client ready even if TTS sync fails
+            this.sendClientReady();
+        }
+    }
+
+    // Send client ready signal to receive initial message with correct TTS
+    sendClientReady() {
+        if (this.ws && this.isConnected) {
+            console.log('Sending client ready signal');
+            this.ws.send(JSON.stringify({
+                type: 'client_ready',
+                timestamp: new Date().toISOString()
+            }));
+        }
+    }
+
     // Update TTS setting on server
     async updateSessionTtsSetting(enabled) {
         try {
@@ -1208,6 +1258,9 @@ class InterviewChat {
             }
         });
 
+        // Set up syntax highlighting
+        this.setupSyntaxHighlighting(codeEditor);
+
         console.log('Code editor initialized');
     }
 
@@ -1218,15 +1271,213 @@ class InterviewChat {
         return 'python';
     }
 
+    setupSyntaxHighlighting(editor) {
+        // Force disable spellcheck via HTML attributes (more reliable than CSS)
+        editor.setAttribute('spellcheck', 'false');
+        editor.setAttribute('autocomplete', 'off');
+        editor.setAttribute('autocorrect', 'off');
+        editor.setAttribute('autocapitalize', 'off');
+        
+        // Remove any existing overlays that might cause issues
+        const existingOverlay = editor.parentNode.querySelector('.pandas-highlight-overlay');
+        if (existingOverlay) {
+            existingOverlay.remove();
+        }
+        
+        // Set up smart highlighting with better performance
+        this.setupSmartHighlighting(editor);
+        this.setupSyntaxHighlighting2(editor);
+        
+        console.log('Code editor styled with enhanced syntax highlighting and spellcheck disabled');
+    }
+
+    setupSyntaxHighlighting2(editor) {
+        // Add language-specific CSS class based on current track
+        const track = this.getLanguageFromTrack();
+        editor.classList.add(`code-${track}`);
+        
+        // Create a simple syntax highlighter
+        const highlightCode = () => {
+            const code = editor.value;
+            if (!code.trim()) return;
+            
+            // Simple keyword highlighting via text selection hints
+            this.addSyntaxHints(editor, code, track);
+        };
+        
+        // Add event listeners for real-time highlighting
+        editor.addEventListener('input', highlightCode);
+        editor.addEventListener('keyup', highlightCode);
+        
+        // Initial highlighting
+        highlightCode();
+    }
+
+    addSyntaxHints(editor, code, language) {
+        // Add subtle visual cues for syntax elements
+        const lines = code.split('\n');
+        let hasKeywords = false;
+        
+        if (language === 'python') {
+            const pythonKeywords = ['def', 'import', 'from', 'if', 'else', 'for', 'while', 'return', 'class', 'try', 'except', 'with', 'as'];
+            hasKeywords = pythonKeywords.some(keyword => code.includes(keyword));
+        } else if (language === 'sql') {
+            const sqlKeywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP BY', 'ORDER BY', 'INSERT', 'UPDATE', 'DELETE'];
+            hasKeywords = sqlKeywords.some(keyword => code.toUpperCase().includes(keyword));
+        }
+        
+        // Subtle border color change to indicate syntax recognition
+        if (hasKeywords) {
+            editor.style.borderColor = '#58a6ff';
+            setTimeout(() => {
+                editor.style.borderColor = '#30363d';
+            }, 1000);
+        }
+    }
+
+    setupSmartHighlighting(editor) {
+        // Create a lightweight highlighting system using textarea selection
+        const container = editor.parentNode;
+        
+        // Add event listeners for real-time highlighting hints
+        editor.addEventListener('input', () => this.updateSmartHighlighting(editor));
+        editor.addEventListener('keyup', () => this.updateSmartHighlighting(editor));
+        editor.addEventListener('focus', () => this.showSyntaxHints(editor));
+        
+        // Initial highlighting
+        this.updateSmartHighlighting(editor);
+    }
+
+    updateSmartHighlighting(editor) {
+        const code = editor.value;
+        if (!code.trim()) return;
+        
+        // Smart bracket matching and indentation assistance
+        this.assistBracketMatching(editor);
+        this.assistPandasCompletion(editor);
+    }
+
+    assistBracketMatching(editor) {
+        const cursorPos = editor.selectionStart;
+        const code = editor.value;
+        const char = code[cursorPos - 1];
+        
+        // Flash matching brackets briefly
+        if (['(', ')', '[', ']', '{', '}'].includes(char)) {
+            editor.style.transition = 'box-shadow 0.2s ease';
+            editor.style.boxShadow = '0 0 8px rgba(100, 149, 237, 0.5)';
+            setTimeout(() => {
+                editor.style.boxShadow = 'none';
+            }, 200);
+        }
+    }
+
+    assistPandasCompletion(editor) {
+        const cursorPos = editor.selectionStart;
+        const code = editor.value;
+        const lineStart = code.lastIndexOf('\n', cursorPos - 1) + 1;
+        const currentLine = code.substring(lineStart, cursorPos);
+        
+        // Show subtle visual feedback for pandas operations
+        if (currentLine.includes('df.') || currentLine.includes('pd.')) {
+            editor.style.borderColor = '#a5d6ff';
+            setTimeout(() => {
+                editor.style.borderColor = '#30363d';
+            }, 1000);
+        }
+    }
+
+    showSyntaxHints(editor) {
+        // Create a tooltip with pandas shortcuts
+        this.createSyntaxTooltip(editor);
+    }
+
+    createSyntaxTooltip(editor) {
+        // Remove existing tooltip
+        const existingTooltip = document.querySelector('.pandas-tooltip');
+        if (existingTooltip) {
+            existingTooltip.remove();
+        }
+        
+        const tooltip = document.createElement('div');
+        tooltip.className = 'pandas-tooltip';
+        tooltip.style.cssText = `
+            position: absolute;
+            top: -40px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #e6edf3;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: 'Fira Code', monospace;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            white-space: nowrap;
+            border: 1px solid #30363d;
+        `;
+        
+        tooltip.innerHTML = `
+            <span style="color: #a5d6ff;">df</span><span style="color: #d2a8ff;">.head()</span> | 
+            <span style="color: #a5d6ff;">df</span><span style="color: #d2a8ff;">.groupby()</span> | 
+            <span style="color: #ffa657;">pd.DataFrame()</span>
+        `;
+        
+        editor.parentNode.style.position = 'relative';
+        editor.parentNode.appendChild(tooltip);
+        
+        // Fade in
+        setTimeout(() => {
+            tooltip.style.opacity = '1';
+        }, 100);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (tooltip.parentNode) {
+                tooltip.style.opacity = '0';
+                setTimeout(() => {
+                    if (tooltip.parentNode) {
+                        tooltip.remove();
+                    }
+                }, 300);
+            }
+        }, 3000);
+    }
+
+    updatePandasHighlighting() {
+        // Smart highlighting is now handled by the new system
+        const editor = document.getElementById('code-editor');
+        if (editor) {
+            this.updateSmartHighlighting(editor);
+        }
+    }
+
+    updateSyntaxHighlighting() {
+        // Delegate to the enhanced highlighting system
+        this.updatePandasHighlighting();
+    }
+
     evaluateSolution() {
         if (!this.ws || !this.isConnected) return;
         const codeEditor = document.getElementById('code-editor');
         const language = this.getLanguageFromTrack();
         const code = (codeEditor && codeEditor.value) ? codeEditor.value : '';
+        
+        if (!code.trim()) {
+            this.showOutput('Please write some code before submitting for evaluation.');
+            return;
+        }
+        
+        // Show loading state
+        this.showOutput('🔄 Evaluating your solution...\n\nThe interviewer is reviewing your code and will provide detailed feedback.');
+        
         this.ws.send(JSON.stringify({
             type: 'evaluate_solution',
             language,
-            code
+            code,
+            timestamp: new Date().toISOString()
         }));
         this.showTypingIndicator();
     }
@@ -1348,49 +1599,105 @@ class InterviewChat {
         `;
     }
 
-    insertProblemIntoEditor(problemText) {
+    clearCodeEditor() {
         const codeEditor = document.getElementById('code-editor');
-        const langSelect = document.getElementById('code-language');
+        if (codeEditor) {
+            codeEditor.value = '';
+            console.log('DEBUG: Code editor cleared');
+        }
+    }
+
+    insertProblemIntoEditor(problemText, questionNumber = 1) {
+        console.log('DEBUG: insertProblemIntoEditor called with questionNumber:', questionNumber);
+        const codeEditor = document.getElementById('code-editor');
         if (!codeEditor) return;
         const language = this.getLanguageFromTrack();
         const commentPrefix = language === 'sql' ? '-- ' : '# ';
-        const commented = problemText
+        
+        // Extract just the challenge question (remove data setup sections)
+        const cleanProblem = this.extractChallengeOnly(problemText);
+        
+        const commented = cleanProblem
             .split('\n')
             .map(line => commentPrefix + line)
             .join('\n');
-        // Build a minimal starter template based on language and any detected signature
-        const template = this.buildTemplateForLanguage(language, problemText);
-        const bundle = commented + '\n\n' + template + '\n';
-        // If editor is empty, place the prompt + template; otherwise prepend with separator
-        const sep = `\n\n${commentPrefix}${'-'.repeat(40)}\n`;
-        codeEditor.value = (codeEditor.value && codeEditor.value.trim().length > 0)
-            ? (bundle + sep + codeEditor.value)
-            : bundle;
+        
+        // Add simple data preview code
+        let previewCode = '';
+        if (language === 'python') {
+            previewCode = 'print(df.head())';
+        } else if (language === 'sql') {
+            previewCode = 'SELECT * FROM tbl LIMIT 5;';
+        }
+        
+        const bundle = commented + '\n\n' + previewCode + '\n';
+        
+        // Always populate the editor with the new challenge
+        // (Clearing is now handled separately by clear_editor message)
+        console.log('DEBUG: Populating editor with new challenge');
+        codeEditor.value = bundle;
         codeEditor.focus();
+        
+        // Update pandas syntax highlighting
+        setTimeout(() => this.updatePandasHighlighting(), 0);
     }
 
-    buildTemplateForLanguage(language, problemText) {
-        if (language === 'sql') {
-            return [
-                '-- Write your SQL below',
-                'SELECT /* columns */',
-                'FROM   /* table */',
-                'WHERE  /* conditions */;',
-            ].join('\n');
+    extractChallengeOnly(text) {
+        // Look for ### Challenge Description section and extract just that
+        const lines = text.split('\n');
+        let challengeLines = [];
+        let inChallenge = false;
+        let inCodeBlock = false;
+        
+        for (let line of lines) {
+            // Detect fenced code blocks
+            if (line.trim().startsWith('```')) {
+                inCodeBlock = !inCodeBlock;
+                // Stop collecting challenge lines when we hit a code block
+                if (inCodeBlock && inChallenge) {
+                    break;
+                }
+                continue;
+            }
+            
+            // Skip content inside code blocks
+            if (inCodeBlock) continue;
+            
+            // Start collecting when we see Challenge Description
+            if (line.includes('### Challenge Description') || line.includes('Challenge Description')) {
+                inChallenge = true;
+                continue; // Skip the header line itself
+            }
+            
+            // Collect challenge description lines
+            if (inChallenge && line.trim().length > 0) {
+                challengeLines.push(line);
+            }
         }
-        // Default Python
-        const signature = this.extractPythonSignature(problemText) || 'def solve(/* args */):';
-        const normalizedSig = signature.endsWith(':') ? signature : signature + ':';
-        return [
-            normalizedSig,
-            '    """Implement your solution here."""',
-            '    pass',
-            '',
-            'if __name__ == "__main__":',
-            '    # TODO: add quick tests',
-            '    pass',
-        ].join('\n');
+        
+        let result = challengeLines.join('\n').trim();
+        
+        // If we didn't find a challenge section, try to extract the first meaningful content
+        if (!result || result.length < 10) {
+            // Look for the first non-header, non-code content
+            for (let line of lines) {
+                if (line.trim().startsWith('```') || line.trim().startsWith('#')) continue;
+                if (line.trim().length > 20) {
+                    result = line.trim();
+                    break;
+                }
+            }
+        }
+        
+        // Final fallback
+        if (!result || result.length < 10) {
+            result = "Complete the data analysis task using the provided dataset.";
+        }
+        
+        return result;
     }
+
+
 
     extractPythonSignature(text) {
         if (!text) return null;

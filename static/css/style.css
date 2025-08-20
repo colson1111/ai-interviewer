@@ -348,14 +348,77 @@ body {
     height: 100%;
     border: none;
     outline: none;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-family: 'Fira Code', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 14px;
     line-height: 1.5;
     resize: none;
-    background: #f8f9fa;
+    background: #0d1117;
+    color: #e6edf3;
     padding: 0.5rem;
     border-radius: 8px;
     min-height: 300px;
+    tab-size: 4;
+    spellcheck: false !important;
+    border: 1px solid #30363d;
+    /* Additional spellcheck prevention */
+    -webkit-spellcheck: false;
+    -moz-spellcheck: false;
+    -ms-spellcheck: false;
+    /* Better syntax highlighting base */
+    font-variant-ligatures: normal;
+    font-feature-settings: "liga" on, "calt" on;
+}
+
+/* Disable spellcheck on focus and input */
+#code-editor:focus,
+#code-editor:active {
+    spellcheck: false !important;
+    -webkit-spellcheck: false;
+}
+
+/* Python syntax highlighting colors */
+.code-python .keyword { color: #ff7b72; font-weight: bold; }
+.code-python .string { color: #a5d6ff; }
+.code-python .comment { color: #8b949e; font-style: italic; }
+.code-python .number { color: #79c0ff; }
+.code-python .function { color: #d2a8ff; }
+.code-python .builtin { color: #ffa657; }
+.code-python .operator { color: #ff7b72; }
+
+/* SQL syntax highlighting colors */
+.code-sql .keyword { color: #ff7b72; font-weight: bold; text-transform: uppercase; }
+.code-sql .string { color: #a5d6ff; }
+.code-sql .comment { color: #8b949e; font-style: italic; }
+.code-sql .number { color: #79c0ff; }
+.code-sql .function { color: #d2a8ff; }
+.code-sql .table { color: #ffa657; }
+.code-sql .column { color: #e6edf3; }
+
+/* Syntax highlighting support classes */
+.syntax-highlight {
+    position: relative;
+}
+
+.highlight-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 1;
+    font-family: 'Fira Code', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    padding: 0.5rem;
+    margin: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: transparent;
+    overflow: hidden;
+    tab-size: 4;
 }
 
 .output-container {

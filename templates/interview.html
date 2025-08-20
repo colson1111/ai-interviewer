@@ -7,6 +7,11 @@
 <meta name="tts-voice" content="{{ tts_voice }}">
 <meta name="tts-enabled" content="{{ tts_enabled }}">
 {% if technical_track %}<meta name="technical-track" content="{{ technical_track }}">{% endif %}
+<!-- Highlight.js for syntax highlighting -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
 {% endblock %}
 
 {% block header_content %}
@@ -150,5 +155,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/interview.js?v=4"></script>
+<script src="/static/js/interview.js?v=7"></script>
 {% endblock %}
