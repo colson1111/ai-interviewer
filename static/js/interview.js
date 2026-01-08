@@ -353,7 +353,7 @@ class InterviewChat {
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
     
-    endInterview() {
+    async endInterview() {
         if (confirm('Are you sure you want to end the interview?')) {
             if (this.ws && this.isConnected) {
                 this.ws.send(JSON.stringify({
@@ -362,29 +362,40 @@ class InterviewChat {
                 }));
             }
             
+            // Show loading state
+            const modal = document.getElementById('summary-modal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                const content = document.getElementById('summary-content');
+                if (content) {
+                    content.innerHTML = '<div style="text-align: center; padding: 20px;"><p>🤖 Generating comprehensive interview report...</p><p>This analyzes your entire conversation history.</p></div>';
+                }
+            }
+            
+            try {
+                const response = await fetch(`/api/evaluate-session/${this.sessionId}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Evaluation failed');
+                }
+                
+                const report = await response.json();
+                this.showInterviewSummary(report);
+                
+            } catch (error) {
+                const content = document.getElementById('summary-content');
+                if (content) {
+                    content.innerHTML = `<div class="error" style="color: red; padding: 20px;">Failed to generate report: ${error.message}</div>`;
+                }
+                console.error('Evaluation error:', error);
+            }
+            
             // Close WebSocket
             if (this.ws) {
                 this.ws.close(1000, 'Interview ended by user');
             }
-            
-            // Generate summary (placeholder with honest messaging)
-            setTimeout(() => {
-                this.showInterviewSummary({
-                    duration: '[Placeholder - Not yet tracked]',
-                    questionsAsked: '[Placeholder - Not yet counted]',
-                    overallScore: '[Placeholder - AI scoring not implemented]',
-                    strengths: [
-                        '🚧 Interview analysis coming soon!',
-                        'This will use AI to evaluate your responses',
-                        'Real-time performance scoring will be added'
-                    ],
-                    improvements: [
-                        '🚧 This is just a UI mockup',
-                        'Actual feedback will analyze your specific answers',
-                        'AI will provide personalized suggestions'
-                    ]
-                });
-            }, 1000);
         }
     }
     
@@ -393,25 +404,47 @@ class InterviewChat {
         const content = document.getElementById('summary-content');
         
         content.innerHTML = `
-            <div class="summary-stats">
-                <h4>📊 Interview Statistics</h4>
-                <p><strong>Duration:</strong> ${summary.duration || 'N/A'}</p>
-                <p><strong>Questions Asked:</strong> ${summary.questionsAsked || 'N/A'}</p>
-                <p><strong>Overall Score:</strong> ${summary.overallScore || 'N/A'}</p>
-            </div>
-            
-            <div class="summary-strengths">
-                <h4>✅ Strengths</h4>
-                <ul>
-                    ${(summary.strengths || []).map(s => `<li>${s}</li>`).join('')}
-                </ul>
-            </div>
-            
-            <div class="summary-improvements">
-                <h4>📈 Areas for Improvement</h4>
-                <ul>
-                    ${(summary.improvements || []).map(i => `<li>${i}</li>`).join('')}
-                </ul>
+            <div class="summary-container" style="padding: 20px;">
+                <div class="summary-header" style="text-align: center; margin-bottom: 20px;">
+                    <div class="score-display" style="font-size: 3rem; font-weight: bold; color: ${summary.score >= 7 ? '#2ea043' : '#d29922'};">
+                        ${summary.score}/10
+                    </div>
+                    <h4>Overall Score</h4>
+                </div>
+                
+                <div class="summary-section" style="margin-bottom: 20px;">
+                    <h5>Executive Summary</h5>
+                    <p>${summary.summary}</p>
+                </div>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                    <div class="summary-strengths">
+                        <h5 style="color: #2ea043;">✅ Strengths</h5>
+                        <ul>
+                            ${(summary.strengths || []).map(s => `<li>${s}</li>`).join('')}
+                        </ul>
+                    </div>
+                    
+                    <div class="summary-improvements">
+                        <h5 style="color: #d29922;">📈 Areas for Improvement</h5>
+                        <ul>
+                            ${(summary.improvements || []).map(i => `<li>${i}</li>`).join('')}
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="summary-assessments" style="background: #161b22; padding: 15px; border-radius: 6px; color: #e6edf3;">
+                    <div style="margin-bottom: 10px;">
+                        <strong style="color: #58a6ff;">Communication:</strong> ${summary.communication_assessment}
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <strong style="color: #58a6ff;">Cultural Fit:</strong> ${summary.cultural_fit_assessment}
+                    </div>
+                    ${summary.technical_assessment ? `
+                    <div>
+                        <strong style="color: #58a6ff;">Technical:</strong> ${summary.technical_assessment}
+                    </div>` : ''}
+                </div>
             </div>
         `;
         

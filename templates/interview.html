@@ -16,7 +16,7 @@
 
 {% block header_content %}
 <div class="interview-header">
-    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview{% if technical_track %} · {{ technical_track.replace('_', ' ').title() }}{% endif %}</span>
+    <span class="interview-type">{{ interview_type.replace('_', ' ').title() }} Interview</span>
     {% if company_name %}
     <span class="company-info">{{ company_name }} {% if role_title %}- {{ role_title }}{% endif %}</span>
     {% endif %}
@@ -25,7 +25,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="interview-container {% if interview_type == 'technical' %}technical-layout{% else %}full-width-layout{% endif %}">
+<div class="interview-container full-width-layout">
     
     <!-- Main Chat Area -->
     <div class="chat-section">

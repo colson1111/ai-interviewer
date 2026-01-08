@@ -10,9 +10,10 @@ from ..core import InterviewContext, AgentMessage, AgentResponse, AgentCapabilit
 class BaseInterviewAgent(ABC):
     """Abstract base class for all interview agents."""
     
-    def __init__(self, name: str, capabilities: List[AgentCapability]):
+    def __init__(self, name: str, capabilities: List[AgentCapability], pydantic_agent: Optional[Any] = None):
         self.name = name
         self.capabilities = capabilities
+        self.pydantic_agent = pydantic_agent
         self.is_enabled = True
         self.last_used = 0.0
         self.usage_count = 0
@@ -90,7 +91,8 @@ class BaseInterviewAgent(ABC):
             'is_enabled': self.is_enabled,
             'usage_count': self.usage_count,
             'last_used': self.last_used,
-            'performance_metrics': self.performance_metrics.copy()
+            'performance_metrics': self.performance_metrics.copy(),
+            'pydantic_agent_status': str(self.pydantic_agent) if self.pydantic_agent else None
         }
     
     def enable(self):

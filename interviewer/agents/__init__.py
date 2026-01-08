@@ -4,10 +4,10 @@ from .base import BaseInterviewAgent
 from .registry import AgentRegistry
 from .orchestrator import OrchestratorAgent
 from .interview import InterviewAgent
-from .technical import TechnicalInterviewerAgent
 from .feedback import FeedbackAgent
 from .summary import SummaryAgent
 from .search import SearchAgent
+from .evaluation import EvaluationAgent
 
 __all__ = [
     'BaseInterviewAgent',
@@ -16,5 +16,6 @@ __all__ = [
     'InterviewAgent',
     'FeedbackAgent',
     'SummaryAgent',
-    'SearchAgent'
+    'SearchAgent',
+    'EvaluationAgent'
 ]

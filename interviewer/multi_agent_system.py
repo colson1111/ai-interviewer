@@ -18,7 +18,7 @@ import time
 from .config import LLMConfig, InterviewConfig
 from .core import InterviewContext, AgentMessage, AgentResponse, ConversationTurn
 from .core.messaging import MessageType
-from .agents import InterviewAgent, TechnicalInterviewerAgent, SearchAgent, SummaryAgent
+from .agents import InterviewAgent, SearchAgent, SummaryAgent, EvaluationAgent
 from .agents.registry import AgentRegistry
 from .agents.orchestrator import OrchestratorAgent
 
@@ -71,8 +71,7 @@ class MultiAgentInterviewSystem:
     def _create_agents(self):
         """Create and configure all specialized agents."""
         # Primary interview agents
-        self.interview_agent = InterviewAgent(self.llm_config)
-        self.technical_agent = TechnicalInterviewerAgent(self.llm_config)
+        self.interview_agent = InterviewAgent(self.llm_config, self.interview_config)
         
         # Search agent for real-time information lookup
         self.search_agent = SearchAgent(self.llm_config)
@@ -83,7 +82,6 @@ class MultiAgentInterviewSystem:
     def _register_agents(self):
         """Register all agents with the agent registry."""
         self.agent_registry.register_agent(self.interview_agent)
-        self.agent_registry.register_agent(self.technical_agent)
         self.agent_registry.register_agent(self.search_agent)
         self.agent_registry.register_agent(self.summary_agent)
     
@@ -104,9 +102,7 @@ class MultiAgentInterviewSystem:
             AgentResponse with the initial message
         """
         # Choose the correct primary agent based on interview type
-        primary_agent = (
-            self.technical_agent if context.interview_config.interview_type.value == "technical" else self.interview_agent
-        )
+        primary_agent = self.interview_agent
 
         # Create initial message from the selected agent
         initial_message = await primary_agent.process(

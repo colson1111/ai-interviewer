@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 
-from interviewer.config import LLMConfig, InterviewConfig, LLMProvider, InterviewType, Tone, Difficulty, TechnicalTrack
+from interviewer.config import LLMConfig, InterviewConfig, LLMProvider, InterviewType, Tone, Difficulty
 from interviewer.core import InterviewContext, CandidateInfo
 from interviewer.document_parser import create_document_context
 from interviewer.multi_agent_system import create_multi_agent_interview_system
@@ -33,7 +33,8 @@ from interviewer.cost_tracker import CostTracker
 
 
 # Load environment variables from .env_local
-load_dotenv('.env_local')
+# override=True ensures .env_local values take precedence over shell environment
+load_dotenv('.env_local', override=True)
 
 # Import our existing interviewer components
 from interviewer.config import LLMConfig, InterviewConfig, LLMProvider, InterviewType, Tone, Difficulty
@@ -41,383 +42,17 @@ from interviewer.multi_agent_system import create_multi_agent_interview_system
 from interviewer.document_parser import create_document_context
 from interviewer.cost_tracker import CostTracker, estimate_tokens_detailed
 from interviewer.core import InterviewContext, CandidateInfo, InterviewPhase
-import subprocess
 import sys
 import tempfile
 
 
-# Technical problem skill categories for diverse coverage
-TECHNICAL_SKILL_CATEGORIES = [
-    {
-        "name": "basic_aggregation",
-        "description": "simple groupby operations, basic statistics (sum, mean, count)",
-        "keywords": ["groupby", "aggregation", "sum", "mean", "count", "total"],
-        "focus": "Group data by categories and calculate totals, averages, or counts"
-    },
-    {
-        "name": "filtering_ranking", 
-        "description": "filtering data with conditions, sorting and ranking results",
-        "keywords": ["filter", "sort", "top", "bottom", "rank", "condition"],
-        "focus": "Find records that meet criteria, rank items, identify outliers"
-    },
-    {
-        "name": "date_extraction",
-        "description": "extracting date components, basic date filtering", 
-        "keywords": ["date", "year", "month", "day", "weekday", "extract"],
-        "focus": "Extract date parts, filter by date ranges, format dates"
-    },
-    {
-        "name": "time_series_analysis",
-        "description": "rolling calculations, lag operations, growth rates",
-        "keywords": ["rolling", "cumulative", "window", "lag", "lead", "growth"],
-        "focus": "Calculate moving averages, compare periods, trend analysis"
-    },
-    {
-        "name": "data_relationships",
-        "description": "merging datasets, joining tables, combining data sources",
-        "keywords": ["join", "merge", "combine", "relationship", "foreign key"],
-        "focus": "Combine multiple datasets, match records across tables"
-    },
-    {
-        "name": "text_operations",
-        "description": "string manipulation, pattern matching, text cleaning",
-        "keywords": ["string", "text", "contains", "regex", "pattern", "split"],
-        "focus": "Clean text data, extract patterns, categorize text content"
-    },
-    {
-        "name": "conditional_logic",
-        "description": "complex filtering, multi-step transformations, business logic",
-        "keywords": ["if", "where", "case", "condition", "logic", "transform"],
-        "focus": "Apply business rules, multi-step data transformations, conditional operations"
-    }
-]
-
-async def handle_next_technical_problem(session, interview_system, context, websocket):
-    """
-    Generate the next technical problem in a 3-problem sequence with diverse skill coverage.
-    """
-    try:
-        # Initialize or get problem tracking
-        if "technical_problems" not in session:
-            session["technical_problems"] = {
-                "completed": 0,
-                "used_categories": [],
-                "total_target": 3
-            }
-        
-        problem_tracker = session["technical_problems"]
-        problem_tracker["completed"] += 1
-        
-        print(f"DEBUG: Technical problem {problem_tracker['completed']}/{problem_tracker['total_target']} completed")
-        
-        # Check if we should generate another problem
-        if problem_tracker["completed"] < problem_tracker["total_target"]:
-            # Choose next skill category (avoid previously used ones)
-            available_categories = [cat for cat in TECHNICAL_SKILL_CATEGORIES 
-                                  if cat["name"] not in problem_tracker["used_categories"]]
-            
-            if available_categories:
-                import random
-                next_category = random.choice(available_categories)
-                problem_tracker["used_categories"].append(next_category["name"])
-                
-                print(f"DEBUG: Generating next problem with category: {next_category['name']}")
-                
-                # Generate next problem with specific skill focus
-                await generate_next_technical_problem(session, interview_system, context, websocket, next_category)
-            else:
-                # Fallback if we've used all categories
-                await generate_next_technical_problem(session, interview_system, context, websocket, None)
-        else:
-            # All problems completed
-            await websocket.send_text(json.dumps({
-                "type": "interviewer",
-                "content": "Excellent work! You've completed all three technical challenges. That concludes the technical portion of our interview. Do you have any questions about the problems or would you like to discuss your approach to any of them?",
-                "timestamp": datetime.now().isoformat()
-            }))
-            
-    except Exception as e:
-        print(f"DEBUG: Error in handle_next_technical_problem: {e}")
-        import traceback
-        traceback.print_exc()
-
-async def generate_next_technical_problem(session, interview_system, context, websocket, skill_category):
-    """
-    Generate a new technical problem with optional skill category focus.
-    """
-    try:
-        # Build a prompt that focuses on the specific skill category
-        if skill_category:
-            category_prompt = (f"Generate a {skill_category['description']} problem. "
-                             f"Focus on skills like: {', '.join(skill_category['keywords'])}. "
-                             "Make sure this is different from previous problems.")
-        else:
-            category_prompt = "Generate a different type of problem from previous ones."
-        
-        # Create a more detailed prompt for the next problem
-        next_problem_prompt = (
-            f"Please provide the next coding challenge. {category_prompt} "
-            "Create a new dataset and problem that tests different pandas/SQL skills. "
-            "This should be a standalone challenge with its own dataset."
-        )
-        
-        # Add skill category hint to context if available
-        if skill_category:
-            # Store skill hint in session for the technical agent to use  
-            session["skill_category_hint"] = f"{skill_category['description']} - {skill_category['focus']}"
-            print(f"DEBUG: Set skill hint: {session['skill_category_hint']}")
-            
-            # Also add to context metadata for immediate use
-            context.session_metadata = context.session_metadata or {}
-            context.session_metadata['skill_category_hint'] = session["skill_category_hint"]
-        
-        print(f"DEBUG: Generating next problem with prompt: {next_problem_prompt}")
-        
-        # Generate coding challenge directly instead of going through normal message processing
-        from interviewer.agents.technical import TechnicalInterviewerAgent
-        tech_agent = TechnicalInterviewerAgent(llm_config=session["llm_config"])
-        
-        # Call the coding challenge generation directly
-        challenge = await tech_agent._generate_coding_challenge(context)
-        
-        # Create a proper response with coding challenge metadata
-        class MockResponse:
-            def __init__(self):
-                self.content = "I'll place the next coding problem in the editor now. This one focuses on different skills from the previous challenge."
-                self.metadata = {
-                    'question_type': 'coding_challenge',
-                    'question_number': session["technical_problems"]["completed"] + 1,
-                    'interview_phase': 'coding',
-                    'editor_prompt': challenge,
-                    'primary_agent_metadata': {
-                        'question_type': 'coding_challenge',
-                        'question_number': session["technical_problems"]["completed"] + 1,
-                        'interview_phase': 'coding',
-                        'editor_prompt': challenge,
-                    }
-                }
-        
-        primary = MockResponse()
-        combined_response = {
-            'primary_response': primary,
-            'metadata': {'agents_used': ['technical_interviewer']}
-        }
-        meta_raw = getattr(primary, "metadata", {}) or {}
-        agent_meta = meta_raw.get("primary_agent_metadata", {}) if isinstance(meta_raw, dict) else {}
-        
-        question_type = agent_meta.get("question_type") or meta_raw.get("question_type")
-        
-        if question_type == "coding_challenge":
-            # Send coding prompt to editor
-            editor_prompt = agent_meta.get("editor_prompt", "")
-            if editor_prompt:
-                question_num = agent_meta.get("question_number", 1)
-                print(f"DEBUG: Sending coding_prompt with question_number: {question_num}")
-                await websocket.send_text(json.dumps({
-                    "type": "coding_prompt",
-                    "content": editor_prompt,
-                    "question_number": question_num,
-                    "timestamp": datetime.now().isoformat()
-                }))
-                
-                # Store current problem
-                session["current_problem"] = editor_prompt
-                print(f"DEBUG: Next problem sent to editor")
-                
-                # Increment completed count after successfully sending subsequent challenge
-                session["technical_problems"]["completed"] += 1
-                print(f"DEBUG: Incremented completed count after sending challenge: {session['technical_problems']['completed']}")
-            
-            # Send concise chat response
-            await websocket.send_text(json.dumps({
-                "type": "interviewer",
-                "content": primary.content,
-                "timestamp": datetime.now().isoformat()
-            }))
-        else:
-            # Regular response
-            await websocket.send_text(json.dumps({
-                "type": "interviewer", 
-                "content": primary.content,
-                "timestamp": datetime.now().isoformat()
-            }))
-            
-    except Exception as e:
-        print(f"DEBUG: Error generating next technical problem: {e}")
-        import traceback
-        traceback.print_exc()
-
-async def send_feedback_followup_prompt(session, websocket):
-    """
-    Send a follow-up prompt after feedback asking if user wants to discuss or proceed.
-    """
-    try:
-        # Initialize or get problem tracking
-        if "technical_problems" not in session:
-            session["technical_problems"] = {
-                "completed": 0,
-                "used_categories": [],
-                "total_target": 3
-            }
-        
-        problem_tracker = session["technical_problems"]
-        
-        if problem_tracker["completed"] < problem_tracker["total_target"]:
-            problems_remaining = problem_tracker["total_target"] - problem_tracker["completed"]
-            
-            followup_message = (
-                f"\n\nWould you like to discuss this solution further, or shall we move on to the next challenge? "
-                f"({problems_remaining} more challenge{'s' if problems_remaining > 1 else ''} remaining)"
-            )
-        else:
-            followup_message = (
-                "\n\nWould you like to discuss this solution further, or are you ready to wrap up the technical portion?"
-            )
-        
-        await websocket.send_text(json.dumps({
-            "type": "interviewer",
-            "content": followup_message,
-            "timestamp": datetime.now().isoformat()
-        }))
-        
-        # Mark that we're waiting for user decision
-        session["awaiting_next_action"] = True
-        
-    except Exception as e:
-        print(f"DEBUG: Error in send_feedback_followup_prompt: {e}")
-
-async def generate_next_technical_problem_on_demand(session, interview_system, context, websocket):
-    """
-    Generate the next technical problem when user explicitly requests it (don't auto-increment counter).
-    """
-    try:
-        # Initialize or get problem tracking
-        if "technical_problems" not in session:
-            session["technical_problems"] = {
-                "completed": 0,
-                "used_categories": [],
-                "total_target": 3
-            }
-        
-        problem_tracker = session["technical_problems"]
-        
-        print(f"DEBUG: Generating next technical problem on demand: {problem_tracker['completed']}/{problem_tracker['total_target']} completed")
-        
-        # Check if we should generate another problem
-        if problem_tracker["completed"] < problem_tracker["total_target"]:
-            # Choose next skill category (avoid previously used ones)
-            available_categories = [cat for cat in TECHNICAL_SKILL_CATEGORIES 
-                                  if cat["name"] not in problem_tracker["used_categories"]]
-            
-            if available_categories:
-                import random
-                next_category = random.choice(available_categories)
-                problem_tracker["used_categories"].append(next_category["name"])
-                
-                print(f"DEBUG: Generating next problem with category: {next_category['name']}")
-                
-                # Clear the editor first
-                await websocket.send_text(json.dumps({
-                    "type": "clear_editor",
-                    "timestamp": datetime.now().isoformat()
-                }))
-                
-                # Send "generating" message to user
-                await websocket.send_text(json.dumps({
-                    "type": "interviewer",
-                    "content": f"Great! Let me prepare your next challenge focusing on {next_category['description']}. This will take a moment...",
-                    "timestamp": datetime.now().isoformat()
-                }))
-                
-                # Generate next problem with specific skill focus
-                await generate_next_technical_problem(session, interview_system, context, websocket, next_category)
-            else:
-                # Fallback if we've used all categories
-                await websocket.send_text(json.dumps({
-                    "type": "interviewer",
-                    "content": "Great! Let me prepare your final challenge. This will take a moment...",
-                    "timestamp": datetime.now().isoformat()
-                }))
-                await generate_next_technical_problem(session, interview_system, context, websocket, None)
-        else:
-            # All problems completed
-            await websocket.send_text(json.dumps({
-                "type": "interviewer",
-                "content": "Excellent work! You've completed all three technical challenges. That concludes the technical portion of our interview. Do you have any questions about the problems or would you like to discuss your approach to any of them?",
-                "timestamp": datetime.now().isoformat()
-            }))
-            
-    except Exception as e:
-        print(f"DEBUG: Error in generate_next_technical_problem_on_demand: {e}")
-        import traceback
-        traceback.print_exc()
-
 async def detect_user_intent(user_message: str, session) -> str:
     """
     Use LLM to detect user intent from natural language.
-    Returns: 'proceed_to_next_challenge', 'discuss_current_solution', or 'other'
+    Returns: 'other' (as simplified for behavioral/case study only)
     """
-    try:
-        # Get LLM config from session
-        llm_config = session.get("llm_config")
-        if not llm_config:
-            return "other"
-        
-        intent_prompt = f"""Analyze this user message and determine their intent in a technical interview context.
-
-User message: "{user_message}"
-
-Context: This is during a technical interview. The user might want to:
-1. Move on to the next challenge/question/problem
-2. Discuss their current solution further  
-3. Something else entirely
-
-Respond with EXACTLY one of these three options:
-- "proceed_to_next_challenge" - if they want to move to the next problem/challenge
-- "discuss_current_solution" - if they want to talk more about their current answer
-- "other" - for anything else
-
-Examples:
-- "Let's move on" → proceed_to_next_challenge
-- "Next question please" → proceed_to_next_challenge  
-- "g'head wid #2" → proceed_to_next_challenge
-- "Can we discuss this more?" → discuss_current_solution
-- "I'd like to explain my approach" → discuss_current_solution
-- "How's the weather?" → other
-
-Intent:"""
-
-        if llm_config.provider.value == "openai":
-            import openai
-            client = openai.OpenAI(api_key=llm_config.api_key)
-            
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Use fast model for intent detection
-                messages=[
-                    {"role": "user", "content": intent_prompt}
-                ],
-                max_tokens=50,
-                temperature=0.1  # Low temperature for consistent classification
-            )
-            
-            intent = response.choices[0].message.content.strip().lower()
-            
-            # Validate response
-            valid_intents = ["proceed_to_next_challenge", "discuss_current_solution", "other"]
-            if intent in valid_intents:
-                return intent
-            else:
-                print(f"DEBUG: Invalid intent response: {intent}, defaulting to 'other'")
-                return "other"
-                
-        else:
-            # Fallback for other providers or if OpenAI fails
-            print(f"DEBUG: Intent detection not implemented for provider {llm_config.provider.value}")
-            return "other"
-            
-    except Exception as e:
-        print(f"DEBUG: Error in intent detection: {e}")
-        return "other"
+    # Intent detection logic can be simplified or enhanced for behavioral interviews later
+    return "other"
 
 
 # Initialize FastAPI application
@@ -483,7 +118,6 @@ async def setup_interview(
     interview_type: str = Form(...),
     tone: str = Form(...),
     difficulty: str = Form(...),
-    technical_track: Optional[str] = Form(None),
     tts_voice: str = Form("alloy"),  # Voice selection
     tts_enabled: Optional[str] = Form(None),  # Checkbox (None if unchecked)
     company_name: Optional[str] = Form(None),
@@ -526,9 +160,10 @@ async def setup_interview(
         
         # Process API key (use environment variable if not provided)
         if not api_key:
-            api_key = os.getenv(f"{llm_provider.upper()}_API_KEY")
+            api_key_env_var = f"{llm_provider.upper()}_API_KEY"
+            api_key = os.getenv(api_key_env_var)
             if not api_key:
-                raise HTTPException(status_code=400, detail=f"No API key provided for {llm_provider}")
+                raise HTTPException(status_code=400, detail=f"No API key provided for {llm_provider}. Checked env var: {api_key_env_var}")
         
         # Create LLM configuration
         llm_config = LLMConfig(
@@ -537,12 +172,16 @@ async def setup_interview(
             model=llm_model
         )
         
+        # CRITICAL: Set the environment variable BEFORE creating the agent system
+        # pydantic-ai's OpenAIModel/AnthropicModel read from environment variables
+        env_var_name = f"{llm_config.provider.value.upper()}_API_KEY"
+        os.environ[env_var_name] = api_key
+        
         # Create interview configuration
         interview_config = InterviewConfig(
             interview_type=InterviewType(interview_type),
             tone=Tone(tone),
-            difficulty=Difficulty(difficulty),
-            technical_track=TechnicalTrack(technical_track) if (technical_track and interview_type == 'technical') else None,
+            difficulty=Difficulty(difficulty)
         )
         
         # Process uploaded documents
@@ -595,6 +234,8 @@ async def setup_interview(
         
     except Exception as e:
         print(f"Error in setup_interview: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to setup interview")
 
 
@@ -669,326 +310,6 @@ async def whisper_available():
     api_key = os.getenv("OPENAI_API_KEY")
     return {"available": bool(api_key)}
 
-
-@app.post("/api/execute")
-async def execute_code(request: Request):
-    """
-    Execute code for technical interviews (Phase 1 sandbox):
-    - Python: run in isolated subprocess with timeout
-    - SQL: run in DuckDB in-memory database
-
-    Request JSON: { language: "python"|"sql", code: str, session_id?: str }
-    Response JSON: { success, stdout, stderr, duration_ms, error_type?, table? }
-    """
-    try:
-        body = await request.json()
-        language = (body.get("language") or "").lower().strip()
-        code = body.get("code") or ""
-        session_id = body.get("session_id")
-
-        if not code or language not in {"python", "sql"}:
-            raise HTTPException(status_code=400, detail="Provide language in {python, sql} and non-empty code")
-
-        start_time = time.time()
-
-        # Enforce track-language alignment (server-side guard)
-        sess = active_sessions.get(session_id) if session_id else None
-        track = None
-        try:
-            cfg = (sess or {}).get("interview_config")
-            track = getattr(cfg, "technical_track", None)
-            track = track.value if track else None
-        except Exception:
-            track = None
-        if track:
-            if track == "sql" and language != "sql":
-                raise HTTPException(status_code=400, detail="This interview is SQL-only. Switch language to SQL.")
-            if track in {"pandas", "basic_python", "algorithms"} and language != "python":
-                raise HTTPException(status_code=400, detail="This interview is Python-only. Switch language to Python.")
-
-        if language == "python":
-            # For pandas/sql tracks, treat Run as JSON dataset validation only
-            from textwrap import dedent
-            # If the track expects data work, inject DataFrame and run code
-            if track in {"pandas", "sql", None}:
-                import re, json as _json
-                problem = (sess or {}).get("current_problem", "")
-                print(f"DEBUG: Looking for JSON in problem text: {problem[:500] if problem else 'EMPTY'}")
-                mj = re.search(r"```json\n([\s\S]*?)```", problem)
-                print(f"DEBUG: JSON regex match result: {bool(mj)}")
-                if mj:
-                    print(f"DEBUG: Found JSON block: {mj.group(1)[:200]}")
-                if not mj:
-                    duration_ms = int((time.time() - start_time) * 1000)
-                    return JSONResponse({
-                        "success": False,
-                        "stdout": "",
-                        "stderr": "Data setup required but not found (no JSON dataset block).",
-                        "duration_ms": duration_ms,
-                        "error_type": "SetupError",
-                    })
-                json_text = mj.group(1)
-                try:
-                    obj = _json.loads(json_text)
-                    # Validate and parse schema
-                    df_setup_code = ""
-                    if isinstance(obj, dict) and "columns" in obj:
-                        columns = obj["columns"]
-                        if not isinstance(columns, dict) or not columns:
-                            raise ValueError("columns must be a non-empty object")
-                        lengths = [len(v) for v in columns.values() if isinstance(v, list)]
-                        if len(lengths) != len(columns):
-                            raise ValueError("all columns must be lists")
-                        if any(l != lengths[0] for l in lengths):
-                            raise ValueError("column lists have unequal lengths")
-                        rows = lengths[0]
-                        # Create pandas DataFrame setup code
-                        df_setup_code = f"import pandas as pd\ndf = pd.DataFrame({repr(columns)})"
-                    elif isinstance(obj, dict) and "rows" in obj:
-                        if not isinstance(obj["rows"], list):
-                            raise ValueError("rows must be a list of objects")
-                        rows = len(obj["rows"])
-                        df_setup_code = f"import pandas as pd\ndf = pd.DataFrame({repr(obj['rows'])})"
-                    else:
-                        raise ValueError("expected 'columns' or 'rows' schema")
-                    if rows < 30 or rows > 100:
-                        raise ValueError(f"row count {rows} out of bounds (30-100)")
-
-                    # Save for 'View data setup'
-                    try:
-                        if session_id and session_id in active_sessions:
-                            s2 = active_sessions[session_id]
-                            if not s2.get("data_setups"):
-                                s2["data_setups"] = {}
-                            s2["data_setups"]["json_setup"] = json_text
-                    except Exception:
-                        pass
-
-                    # Now execute the user's code with DataFrame injected
-                    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
-                        final_code = df_setup_code + "\n\n" + code
-                        print(f"DEBUG: Final code with DataFrame injection:\n{final_code}")
-                        tmp.write(final_code)
-                        tmp_path = tmp.name
-
-                    try:
-                        completed = subprocess.run(
-                            [sys.executable, "-I", "-B", tmp_path],
-                            capture_output=True,
-                            text=True,
-                            timeout=10,
-                        )
-                        stdout = completed.stdout
-                        stderr = completed.stderr
-                        rc = completed.returncode
-                        success = rc == 0
-                        error_type = None if success else "RuntimeError"
-                    except subprocess.TimeoutExpired as e:
-                        stdout = e.stdout or ""
-                        stderr = (e.stderr or "") + "\n[Timed out after 10s]"
-                        success = False
-                        error_type = "Timeout"
-                    finally:
-                        try:
-                            os.unlink(tmp_path)
-                        except Exception:
-                            pass
-
-                    duration_ms = int((time.time() - start_time) * 1000)
-                    return JSONResponse({
-                        "success": success,
-                        "stdout": (stdout or "")[:10000],
-                        "stderr": (stderr or "")[:10000],
-                        "duration_ms": duration_ms,
-                        "error_type": error_type,
-                    })
-                    
-                except Exception as e:
-                    duration_ms = int((time.time() - start_time) * 1000)
-                    return JSONResponse({
-                        "success": False,
-                        "stdout": "",
-                        "stderr": f"Invalid JSON dataset: {e}",
-                        "duration_ms": duration_ms,
-                        "error_type": "SetupError",
-                    })
-
-            # For non-data tracks (algorithms/basic_python), execute raw python as before
-            prelude = ""
-            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
-                final_code = prelude + "\n\n" + code
-                tmp.write(final_code)
-                tmp_path = tmp.name
-
-            try:
-                completed = subprocess.run(
-                    [sys.executable, "-I", "-B", tmp_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                stdout = completed.stdout
-                stderr = completed.stderr
-                rc = completed.returncode
-                success = rc == 0
-                error_type = None if success else "RuntimeError"
-            except subprocess.TimeoutExpired as e:
-                stdout = e.stdout or ""
-                stderr = (e.stderr or "") + "\n[Timed out after 10s]"
-                success = False
-                error_type = "Timeout"
-            finally:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-
-            duration_ms = int((time.time() - start_time) * 1000)
-            result = {
-                "success": success,
-                "stdout": (stdout or "")[:10000],
-                "stderr": (stderr or "")[:10000],
-                "duration_ms": duration_ms,
-                "error_type": error_type,
-            }
-
-        else:  # SQL via DuckDB
-            try:
-                import duckdb  # type: ignore
-            except Exception:
-                raise HTTPException(status_code=500, detail="SQL engine not available on server")
-
-            con = duckdb.connect(database=":memory:")
-            # Seed DuckDB table 'tbl' from LLM-provided JSON dataset (preferred) or SQL setup; do NOT fallback
-            seeded = False
-            try:
-                sess = active_sessions.get(session_id) if session_id else None
-                problem = (sess or {}).get("current_problem", "")
-                import re
-                # Prefer JSON dataset
-                mj = re.search(r"```json\n([\s\S]*?)```", problem)
-                if mj:
-                    import json as _json
-                    import pandas as pd  # type: ignore
-                    json_text = mj.group(1)
-                    try:
-                        obj = _json.loads(json_text)
-                        if isinstance(obj, dict) and 'columns' in obj:
-                            df_seed = pd.DataFrame(obj['columns'])
-                        elif isinstance(obj, dict) and 'rows' in obj:
-                            df_seed = pd.DataFrame(obj['rows'])
-                        else:
-                            raise ValueError("Invalid JSON dataset structure")
-                        con.register('df_seed', df_seed)
-                        con.execute("CREATE TABLE tbl AS SELECT * FROM df_seed;")
-                        seeded = True
-                    except Exception:
-                        seeded = False
-                if not seeded:
-                    m = re.search(r"```sql\n([\s\S]*?)```", problem)
-                    if m:
-                        sql_setup = m.group(1)
-                        con.execute(sql_setup)
-                        seeded = True
-            except Exception:
-                seeded = False
-            if not seeded:
-                # No LLM-provided SQL setup → hard error per requirements
-                try:
-                    con.close()
-                except Exception:
-                    pass
-                duration_ms = int((time.time() - start_time) * 1000)
-                return JSONResponse({
-                    "success": False,
-                    "stdout": "",
-                    "stderr": "Data setup required but not found (no JSON or SQL setup block).",
-                    "duration_ms": duration_ms,
-                    "error_type": "SetupError",
-                    "table": None,
-                })
-
-            # Save setups to session for 'View data setup'
-            try:
-                sess = active_sessions.get(session_id)
-                if sess is not None:
-                    if not sess.get("data_setups"):
-                        sess["data_setups"] = {}
-                    # Store raw blocks if present
-                    import re
-                    py_block = ""
-                    sql_block = ""
-                    json_block = ""
-                    mpy = re.search(r"```python\n([\s\S]*?)```", (sess.get("current_problem", "")))
-                    if mpy:
-                        py_block = mpy.group(1)
-                    msql = re.search(r"```sql\n([\s\S]*?)```", (sess.get("current_problem", "")))
-                    if msql:
-                        sql_block = msql.group(1)
-                    mjson = re.search(r"```json\n([\s\S]*?)```", (sess.get("current_problem", "")))
-                    if mjson:
-                        json_block = mjson.group(1)
-                    sess["data_setups"]["python_setup"] = py_block
-                    sess["data_setups"]["sql_setup"] = sql_block
-                    sess["data_setups"]["json_setup"] = json_block
-            except Exception:
-                pass
-
-            stdout = ""
-            stderr = ""
-            table = None
-            success = True
-            error_type = None
-            try:
-                # DuckDB can run multiple statements separated by ; but we will execute as a single script.
-                res = con.execute(code)
-                try:
-                    df = res.df()
-                    # Truncate rows to 200
-                    if len(df) > 200:
-                        df = df.head(200)
-                    table = {
-                        "columns": list(df.columns),
-                        "rows": df.values.tolist(),
-                    }
-                except Exception:
-                    # Non-select statements
-                    stdout = "OK"
-            except Exception as e:
-                success = False
-                error_type = "SQLError"
-                stderr = str(e)
-            finally:
-                try:
-                    con.close()
-                except Exception:
-                    pass
-
-            duration_ms = int((time.time() - start_time) * 1000)
-            result = {
-                "success": success,
-                "stdout": (stdout or "")[:10000],
-                "stderr": (stderr or "")[:10000],
-                "duration_ms": duration_ms,
-                "error_type": error_type,
-                "table": table,
-            }
-
-        # Optionally store last run in session
-        if session_id and session_id in active_sessions:
-            active_sessions[session_id]["last_run"] = {
-                "language": language,
-                "result": result,
-                "at": datetime.now().isoformat(),
-            }
-
-        return JSONResponse(result)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error in execute_code: {e}")
-        raise HTTPException(status_code=500, detail="Execution failed")
 
 @app.post("/api/whisper-transcribe")
 async def whisper_transcribe(audio_file: UploadFile = File(...), session_id: str = Form(None)):
@@ -1170,11 +491,14 @@ async def interview_page(request: Request, session_id: str):
     
     session = active_sessions[session_id]
     
+    # Check if we have technical track info (removed but check safely)
+    technical_track = None
+
     return templates.TemplateResponse("interview.html", {
         "request": request,
         "session_id": session_id,
         "interview_type": session["interview_config"].interview_type.value,
-        "technical_track": (session["interview_config"].technical_track.value if session["interview_config"].technical_track else None),
+        "technical_track": technical_track,
         "tts_enabled": session.get("tts_enabled", False)
     })
 
@@ -1231,14 +555,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             try:
                 # Receive message from frontend
                 data = await websocket.receive_text()
-                print(f"DEBUG: Received WebSocket data: {data}")
                 message_data = json.loads(data)
-                print(f"DEBUG: Parsed message data: {message_data}")
                 
                 if message_data["type"] == "client_ready":
                     # Client is ready - send initial message if pending
                     if session.get("initial_message_pending"):
-                        print("DEBUG: Client ready - sending initial message")
                         initial_message = await interview_system.get_initial_message(context)
                         await websocket.send_text(json.dumps({
                             "type": "interviewer",
@@ -1246,118 +567,23 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             "timestamp": datetime.now().isoformat()
                         }))
                         session["initial_message_pending"] = False
-                        
-                        # Technical interviews will generate problems fresh when requested
 
                 elif message_data["type"] == "user_message":
-                    print(f"DEBUG: Received user message: {message_data['content']}")
-                    print(f"DEBUG: About to process message through interview system")
-                    
-                    # Use LLM to detect user intent instead of primitive keyword matching
-                    user_intent = await detect_user_intent(message_data["content"], session)
-                    print(f"DEBUG: Detected user intent: {user_intent}")
-                    
-                    if user_intent == "proceed_to_next_challenge":
-                        interview_type = session.get("interview_config", {})
-                        if hasattr(interview_type, 'interview_type'):
-                            interview_type_value = interview_type.interview_type.value
-                        else:
-                            interview_type_value = "unknown"
-                        
-                        if interview_type_value == "technical":
-                            print(f"DEBUG: User wants to proceed to next challenge (LLM detected)")
-                            session["awaiting_next_action"] = False
-                            await generate_next_technical_problem_on_demand(session, interview_system, context, websocket)
-                            continue  # Skip normal message processing
-                    elif user_intent == "discuss_current_solution":
-                        print(f"DEBUG: User wants to discuss current solution (LLM detected)")
-                        session["awaiting_next_action"] = False
-                        # Continue with normal message processing for discussion
-                    else:
-                        # For other intents, clear awaiting flag if set and continue normally
-                        if session.get("awaiting_next_action"):
-                            session["awaiting_next_action"] = False
-                    
-                    # For technical interviews, assign a skill category for the first challenge
-                    interview_type = session.get("interview_config", {})
-                    if hasattr(interview_type, 'interview_type') and interview_type.interview_type.value == "technical":
-                        # Initialize technical problems tracking if first time
-                        if "technical_problems" not in session:
-                            session["technical_problems"] = {
-                                "completed": 0,
-                                "used_categories": [],
-                                "total_target": 3
-                            }
-                        
-                        # If this is the first challenge and no categories used yet, assign one
-                        if (session["technical_problems"]["completed"] == 0 and 
-                            len(session["technical_problems"]["used_categories"]) == 0):
-                            import random
-                            first_category = random.choice(TECHNICAL_SKILL_CATEGORIES)
-                            session["technical_problems"]["used_categories"].append(first_category["name"])
-                            print(f"DEBUG: Assigned first challenge category: {first_category['name']}")
-                            
-                            # Add skill hint to context for the LLM
-                            context.session_metadata = context.session_metadata or {}
-                            context.session_metadata['skill_category_hint'] = f"{first_category['description']} - {first_category['focus']}"
-                    
                     # Process user message through multi-agent system - always fresh generation
-                    print(f"DEBUG: Calling interview_system.process_message with fresh LLM generation")
                     combined_response = await interview_system.process_message(
                         message_data["content"],
                         context
                     )
-                    print(f"DEBUG: Combined response: {combined_response}")
                     
                     # Process the response
                     try:
-                        # Send interviewer response, but if this is a coding challenge, place the
-                        # full prompt into the code editor and keep chat concise
                         primary = combined_response["primary_response"]
-                        # Pull agent metadata (may be nested under primary_agent_metadata)
-                        meta_raw = getattr(primary, "metadata", {}) or {}
-                        agent_meta = meta_raw.get("primary_agent_metadata", {}) if isinstance(meta_raw, dict) else {}
-                        # If not present, also check the top level returned dict's metadata
-                        if not agent_meta:
-                            agent_meta = (combined_response.get("primary_response").metadata or {}).get("primary_agent_metadata", {}) if hasattr(combined_response.get("primary_response"), "metadata") else {}
-
-                        question_type = agent_meta.get("question_type") or meta_raw.get("question_type")
-
-                        if question_type == "coding_challenge":
-                            # Send coding prompt to editor
-                            print(f"DEBUG: agent_meta keys: {list(agent_meta.keys()) if agent_meta else 'None'}")
-                            print(f"DEBUG: meta_raw keys: {list(meta_raw.keys()) if meta_raw else 'None'}")
-                            print(f"DEBUG: editor_prompt in agent_meta: {agent_meta.get('editor_prompt', 'NOT_FOUND')[:200] if agent_meta else 'NO_AGENT_META'}")
-                            editor_text = agent_meta.get("editor_prompt") or meta_raw.get("editor_prompt") or primary.content
-                            # Try to extract and cache current problem in session
-                            session["current_problem"] = editor_text
-                            print(f"DEBUG: Setting current_problem in session: {editor_text[:300]}")
-                            
-                            # Increment completed count for first challenge when it's sent to editor
-                            if session["technical_problems"]["completed"] == 0:
-                                session["technical_problems"]["completed"] += 1
-                                print(f"DEBUG: Incremented completed count for first challenge: {session['technical_problems']['completed']}")
-                            
-                            await websocket.send_text(json.dumps({
-                                "type": "coding_prompt",
-                                "content": editor_text,
-                                "question_number": agent_meta.get("question_number", 1) if agent_meta else 1,
-                                "timestamp": datetime.now().isoformat()
-                            }))
-
-                            # Brief chat message
-                            await websocket.send_text(json.dumps({
-                                "type": "interviewer",
-                                "content": "Problem added to the editor. Use Run Code and the hint buttons whenever you like.",
-                                "timestamp": datetime.now().isoformat()
-                            }))
-                        else:
-                            await websocket.send_text(json.dumps({
-                                "type": "interviewer",
-                                "content": primary.content,
-                                "timestamp": datetime.now().isoformat()
-                            }))
-                        print(f"DEBUG: Sent interviewer response: {combined_response['primary_response'].content}")
+                        
+                        await websocket.send_text(json.dumps({
+                            "type": "interviewer",
+                            "content": primary.content,
+                            "timestamp": datetime.now().isoformat()
+                        }))
                         
                         # Send cost update
                         cost_summary = session["cost_tracker"].get_summary()
@@ -1366,9 +592,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             "content": cost_summary,
                             "timestamp": datetime.now().isoformat()
                         }))
+                        
+                        # Store interviewer response in session history
+                        session["messages"].append({
+                            "type": "interviewer",
+                            "content": primary.content,
+                            "timestamp": datetime.now().isoformat()
+                        })
                     
                     except Exception as e:
-                        print(f"DEBUG: Error processing message: {e}")
+                        print(f"Error processing message: {e}")
                         import traceback
                         traceback.print_exc()
                         # Send error response
@@ -1394,97 +627,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "content": message_data["content"],
                         "timestamp": datetime.now().isoformat()
                     })
-                    
-                elif message_data["type"] == "code_run":
-                    # Store last code run (silent by default; no auto-interviewer reply)
-                    code = message_data.get("code", "")
-                    language = message_data.get("language", "")
-                    result = message_data.get("result", {})
-
-                    session["last_code"] = {"language": language, "code": code}
-                    session["last_result"] = result
-                    # Optionally, we could emit a lightweight ack for UI debugging
-                    # await websocket.send_text(json.dumps({"type": "code_ack", "timestamp": datetime.now().isoformat()}))
-
-                elif message_data["type"] == "evaluate_solution":
-                    # Evaluate the solution and provide detailed feedback
-                    language = message_data.get("language", "python")
-                    code = message_data.get("code", "")
-                    try:
-                        print(f"DEBUG: Evaluating solution: {code[:100]}...")
-                        
-                        # Create evaluation prompt with explicit format examples
-                        evaluation_prompt = (
-                            f"Review this {language} code and provide feedback as a conversational interviewer:\n\n"
-                            f"```{language}\n{code}\n```\n\n"
-                            "⚠️ CRITICAL FORMAT REQUIREMENTS:\n"
-                            "- Write ONLY in natural paragraphs like normal conversation\n"
-                            "- NEVER use JSON, dictionaries, or structured data formats\n"
-                            "- NO curly braces {}, square brackets [], or key:value pairs\n"
-                            "- Write like you're speaking to a candidate face-to-face\n\n"
-                            "Example GOOD response format:\n"
-                            "Your code looks solid and correctly solves the problem! Here are a few suggestions to make it even better:\n\n"
-                            "The logic is sound, but you could improve readability by adding comments explaining the grouping step. Also, consider adding error handling for edge cases where the category might not exist.\n\n"
-                            "For performance, the current approach is efficient for this dataset size. If working with larger datasets, you might consider using vectorized operations.\n\n"
-                            "Example BAD response (DO NOT DO THIS):\n"
-                            '{{ "response": "feedback here", "areas": ["item1", "item2"] }}\n\n'
-                            "Focus only on areas for improvement. If the code is good, say so and suggest minor enhancements.\n\n"
-                            "Write your feedback as natural conversation:"
-                        )
-                        
-                        # Call technical interviewer directly to avoid JSON formatting from routing system
-                        from interviewer.agents.technical import TechnicalInterviewerAgent
-                        tech_agent = TechnicalInterviewerAgent(
-                            llm_config=session["llm_config"]
-                        )
-                        
-                        # Call the agent directly with our evaluation prompt
-                        evaluation_response = await tech_agent._call_llm(
-                            evaluation_prompt, 
-                            max_tokens=800, 
-                            force_json=False
-                        )
-                        
-                        # Send evaluation as interviewer response (direct string from agent)
-                        await websocket.send_text(json.dumps({
-                            "type": "interviewer",
-                            "content": evaluation_response,
-                            "timestamp": datetime.now().isoformat()
-                        }))
-                        print(f"DEBUG: Sent evaluation response")
-                        
-                        # Send follow-up prompt for user to choose next action
-                        await send_feedback_followup_prompt(session, websocket)
-                        
-                    except Exception as e:
-                        print(f"DEBUG: Error in solution evaluation: {e}")
-                        await websocket.send_text(json.dumps({
-                            "type": "interviewer", 
-                            "content": "I apologize, but I had trouble evaluating your solution. Could you try submitting again?",
-                            "timestamp": datetime.now().isoformat()
-                        }))
-                        
-                elif message_data["type"] == "hint_request":
-                    focus = message_data.get("focus", "problem")
-                    language = message_data.get("language", "")
-                    code = message_data.get("code", "")
-                    try:
-                        # Build a hint prompt
-                        prompt = [
-                            f"The candidate requested a hint focused on: {focus}.",
-                            "Provide a brief, progressive hint (do not reveal full solution).",
-                        ]
-                        if code:
-                            prompt.append(f"Their current {language} code (truncated):\n{code.splitlines()[:30]}")
-                        guidance_input = "\n\n".join(str(p) for p in prompt)
-                        combined_response = await interview_system.process_message(guidance_input, context)
-                        await websocket.send_text(json.dumps({
-                            "type": "interviewer",
-                            "content": combined_response["primary_response"].content,
-                            "timestamp": datetime.now().isoformat()
-                        }))
-                    except Exception as e:
-                        print(f"hint_request failed: {e}")
 
                 elif message_data["type"] == "tts_request":
                     # Handle TTS synthesis request
@@ -1497,13 +639,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             "timestamp": datetime.now().isoformat()
                         }))
                 else:
-                    print(f"DEBUG: Message type '{message_data['type']}' not handled")
+                    # Unknown message type
+                    pass
                     
             except WebSocketDisconnect:
                 print("WebSocket disconnected")
                 break
             except Exception as e:
-                print(f"DEBUG: Unexpected WebSocket error: {e}")
+                print(f"Unexpected WebSocket error: {e}")
                 import traceback
                 traceback.print_exc()
                 break
@@ -1521,6 +664,47 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         except Exception:
             # Connection might already be closed
             pass
+
+
+@app.post("/api/evaluate-session/{session_id}")
+async def evaluate_session(session_id: str):
+    """
+    Generate a post-interview evaluation report.
+    """
+    if session_id not in active_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    session = active_sessions[session_id]
+    
+    # Initialize evaluation agent
+    from interviewer.agents.evaluation import EvaluationAgent
+    agent = EvaluationAgent(session["llm_config"])
+    
+    # Reconstruct context
+    context = InterviewContext(
+        session_id=session_id,
+        llm_config=session["llm_config"],
+        interview_config=session["interview_config"],
+        candidate_info=session["candidate_info"]
+    )
+    
+    # Populate history from session storage
+    # We need to ensure we have a good history. If the session was just created, it might be empty.
+    # We rely on session["messages"] being populated during the WS chat.
+    for msg in session.get("messages", []):
+        context.add_turn({
+            "speaker": msg["type"], # 'user' or 'interviewer'
+            "content": msg["content"],
+            "timestamp": time.time(), # simplified
+            "message_type": "message"
+        })
+        
+    try:
+        report = await agent.generate_report(context)
+        return report.model_dump()
+    except Exception as e:
+        print(f"Evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/sessions")
@@ -1543,6 +727,16 @@ async def list_sessions():
         })
     
     return {"sessions": sessions}
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Print helpful startup message with clickable localhost URL."""
+    print("\n" + "=" * 50)
+    print("🎤 AI Interviewer is running!")
+    print("=" * 50)
+    print(f"\n👉 Open in browser: http://localhost:3000\n")
+    print("=" * 50 + "\n")
 
 
 if __name__ == "__main__":
