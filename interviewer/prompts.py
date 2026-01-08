@@ -26,7 +26,7 @@ TONE_MODIFIERS = {
     "professional": "Maintain a formal, business-appropriate demeanor.",
     "friendly": "Be warm and encouraging while remaining professional.",
     "challenging": "Be direct and probe deeply into responses.",
-    "supportive": "Be patient and help candidates articulate their thoughts."
+    "supportive": "Be patient and help candidates articulate their thoughts.",
 }
 
 # Difficulty modifiers (affect question depth and tolerance for vague answers)
@@ -37,21 +37,19 @@ DIFFICULTY: Easy
 - Accept general answers and help candidates elaborate
 - Provide encouragement and gentle guidance
 - Focus on one topic at a time""",
-    
     "medium": """
 DIFFICULTY: Medium
 - Ask moderately detailed questions
 - Expect specific examples with some follow-up
 - Balance support with appropriate challenge
 - Probe when answers are too general""",
-    
     "hard": """
 DIFFICULTY: Hard
 - Ask probing, multi-layered questions
 - Challenge vague or generic responses
 - Expect detailed examples with strong evidence
 - Press on inconsistencies, gaps, or mismatches
-- Ask follow-ups that test depth of knowledge"""
+- Ask follow-ups that test depth of knowledge""",
 }
 
 # Interview type guidance
@@ -62,25 +60,24 @@ INTERVIEW TYPE: Behavioral
 - Use STAR method (Situation, Task, Action, Result)
 - Probe for specific examples, not generalizations
 - Ask follow-ups about decisions and outcomes""",
-    
     "case_study": """
 INTERVIEW TYPE: Case Study
 - Present hypothetical scenarios related to the role
 - Guide through structured problem-solving
 - Ask about approach, trade-offs, and reasoning
-- Challenge assumptions and explore alternatives"""
+- Challenge assumptions and explore alternatives""",
 }
 
 
 def build_system_prompt(interview_type: str, tone: str, difficulty: str) -> str:
     """
     Build a complete system prompt from modular components.
-    
+
     Args:
         interview_type: Type of interview (behavioral, case_study)
         tone: Interviewer tone (professional, friendly, challenging, supportive)
         difficulty: Difficulty level (easy, medium, hard)
-    
+
     Returns:
         Complete system prompt string
     """
@@ -123,4 +120,3 @@ EVALUATION CRITERIA:
 
 Provide a fair, constructive, and detailed report using professional language.
 """
-

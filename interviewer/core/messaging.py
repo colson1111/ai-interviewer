@@ -1,12 +1,13 @@
 """Message types and communication structures for multi-agent system."""
 
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class MessageType(Enum):
     """Types of messages in the interview system."""
+
     USER_RESPONSE = "user_response"
     INTERVIEWER_QUESTION = "interviewer_question"
     CODE_SUBMISSION = "code_submission"
@@ -19,15 +20,18 @@ class MessageType(Enum):
 @dataclass
 class AgentMessage:
     """Message sent to an agent for processing."""
+
     content: str
     message_type: MessageType
     metadata: Dict[str, Any]
     sender: str
     timestamp: float
     session_id: str
-    
+
     @classmethod
-    def from_user_input(cls, content: str, session_id: str, timestamp: float) -> 'AgentMessage':
+    def from_user_input(
+        cls, content: str, session_id: str, timestamp: float
+    ) -> "AgentMessage":
         """Create a message from user input."""
         return cls(
             content=content,
@@ -35,13 +39,14 @@ class AgentMessage:
             metadata={},
             sender="user",
             timestamp=timestamp,
-            session_id=session_id
+            session_id=session_id,
         )
 
 
 @dataclass
 class AgentResponse:
     """Response from an agent after processing a message."""
+
     content: str
     confidence: float  # 0.0 to 1.0
     agent_name: str
@@ -49,7 +54,7 @@ class AgentResponse:
     metadata: Dict[str, Any] = None
     next_suggested_agents: List[str] = None
     cost_info: Optional[Dict[str, Any]] = None
-    
+
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
@@ -60,6 +65,7 @@ class AgentResponse:
 @dataclass
 class CombinedResponse:
     """Final response after orchestrator combines multiple agent responses."""
+
     content: str
     primary_agent: str
     contributing_agents: List[str]
