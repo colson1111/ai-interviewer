@@ -1,35 +1,85 @@
 """Core interview agent for general interview questions and conversation flow.
 
-This agent handles the primary interview conversation, including:
-- Generating contextual questions based on interview type
-- Maintaining conversation flow and natural dialogue
-- Adapting to candidate responses and interview context
-- Providing realistic interviewer behavior and tone
+This agent handles the primary interview conversation, using pydantic-ai for structured interaction.
 """
 
 from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
 import time
 import re
 
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.anthropic import AnthropicModel
+
 from .base import BaseInterviewAgent
-from ..config import LLMConfig
+from ..config import LLMConfig, InterviewConfig
 from ..core import InterviewContext, AgentMessage, AgentResponse, AgentCapability
+
+
+@dataclass
+class InterviewDeps:
+    interview_type: str
+    tone: str
+    difficulty: str
+    company_name: Optional[str]
+    role_title: Optional[str]
+    resume_summary: Optional[str]  # Summary/key points from resume
+    jd_summary: Optional[str]  # Summary/key points from JD
+    custom_instructions: Optional[str]  # Custom instructions from user
+    conversation_history: List[Dict[str, Any]]
+    current_phase: str
+
+
+def interview_system_prompt(ctx: RunContext[InterviewDeps]) -> str:
+    """Dynamic system prompt generation based on context."""
+    deps = ctx.deps
+    
+    # Build context about the role/company
+    role_context = ""
+    if deps.company_name:
+        role_context += f"Company: {deps.company_name}\n"
+    if deps.role_title:
+        role_context += f"Role: {deps.role_title}\n"
+        
+    prompt = f"""
+You are an expert interviewer conducting a {deps.interview_type} interview.
+
+INTERVIEW CONTEXT:
+Tone: {deps.tone}
+Difficulty: {deps.difficulty}
+{role_context}
+
+YOUR ROLE:
+- Conduct a professional, realistic interview.
+- Ask relevant follow-up questions based on the candidate's responses.
+- Dig deeper into their experience using specific examples they provide.
+- Maintain the specified tone throughout.
+- If this is a behavioral interview, use STAR method probes.
+- If this is a case study, guide them through the problem structuredly.
+
+GUIDELINES:
+- Keep your responses concise (usually 1-3 sentences/questions).
+- Do NOT repeat yourself.
+- Do NOT be overly encouraging or repetitive with praise.
+- Move the interview forward with each turn.
+- If the user asks for clarification, provide it clearly.
+- If the user is stuck, offer a small hint but don't give the answer.
+
+CURRENT PHASE: {deps.current_phase}
+"""
+    return prompt
 
 
 class InterviewAgent(BaseInterviewAgent):
     """
     Primary interview agent responsible for conducting the actual interview.
     
-    This agent:
-    - Generates contextual questions based on interview type (technical, behavioral, case study)
-    - Maintains natural conversation flow
-    - Adapts questions based on candidate responses
-    - Provides realistic interviewer behavior and tone
-    - Handles conversation context and history
+    Uses pydantic-ai to manage the conversation flow and generation.
     """
     
-    def __init__(self, llm_config: LLMConfig):
-        """Initialize the interview agent with LLM configuration."""
+    def __init__(self, llm_config: LLMConfig, interview_config: InterviewConfig):
+        """Initialize the interview agent with LLM and interview configuration."""
         super().__init__(
             name="interview",
             capabilities=[
@@ -38,55 +88,70 @@ class InterviewAgent(BaseInterviewAgent):
             ]
         )
         self.llm_config = llm_config
+        self.interview_config = interview_config
         self.conversation_history = []
+        self.pydantic_message_history: List[Any] = []  # For pydantic-ai message history
         self.question_count = 0
         self.current_phase = "introduction"
+        self.context_initialized = False  # Track if we've set up the initial context
         
         # Track interview progress and candidate information
         self.candidate_name = None
         self.interview_start_time = time.time()
         self.last_question_time = None
     
+        # Initialize the LLM model
+        if llm_config.provider.value == "openai":
+            model = OpenAIModel(llm_config.model)
+        elif llm_config.provider.value == "anthropic":
+            model = AnthropicModel(llm_config.model)
+        else:
+            raise ValueError(f"Unsupported provider: {llm_config.provider}")
+            
+        # Create Pydantic-AI agent with a STATIC system prompt
+        # Dynamic prompts with functions are causing serialization issues
+        self.pydantic_agent = Agent(
+            model,
+            deps_type=InterviewDeps,
+            system_prompt="""
+You are an expert interviewer conducting a professional interview.
+
+CRITICAL: You will receive context about the role, company, candidate background, and job requirements in your first message. 
+Remember this context throughout the ENTIRE interview. When the candidate asks about the role or company, refer to this context.
+
+YOUR ROLE:
+- Conduct a professional, realistic interview for the specific role and company provided.
+- Ask relevant follow-up questions based on the candidate's responses.
+- Dig deeper into their experience using specific examples they provide.
+- React naturally - question mismatches, probe vague claims, show curiosity about strengths.
+- If this is a behavioral interview, use STAR method probes.
+- If this is a case study, guide them through the problem structuredly.
+
+GUIDELINES:
+- Keep your responses concise (usually 1-3 sentences/questions).
+- Do NOT repeat yourself.
+- Do NOT be overly encouraging or repetitive with praise.
+- Move the interview forward with each turn.
+- If the candidate asks for clarification about the role/company, refer to the context you were given.
+- Question irrelevant experience directly (e.g., if they mention botany for an ML role, ask about the connection).
+
+Adapt your questioning style based on the interview context and candidate responses.
+"""
+        )
+    
     def can_handle(self, message: AgentMessage, context: InterviewContext) -> float:
-        """
-        Determine if this agent can handle the message.
-        
-        The interview agent handles:
-        - User responses (to generate follow-up questions)
-        - System messages (to start the interview)
-        - Context updates (to adapt the interview flow)
-        
-        Returns confidence score (0.0 to 1.0)
-        """
+        """Determine if this agent can handle the message."""
         # High confidence for user messages (candidate responses)
         if message.sender == "user":
             return 0.9
-        
         # Medium confidence for system messages (interview setup)
         if message.sender == "system":
             return 0.7
-        
-        # Lower confidence for other agent messages
         return 0.3
     
     async def process(self, message: AgentMessage, context: InterviewContext) -> AgentResponse:
-        """
-        Process the message and generate an appropriate interview response.
+        """Process the message using Pydantic AI agent."""
         
-        This method:
-        1. Analyzes the incoming message and context
-        2. Determines the appropriate interview phase
-        3. Generates contextual questions or responses
-        4. Updates conversation history and context
-        5. Returns a natural, conversational response
-        
-        Args:
-            message: The incoming message to process
-            context: The current interview context
-            
-        Returns:
-            AgentResponse with the generated interview response
-        """
         # Update conversation history
         self.conversation_history.append({
             "timestamp": time.time(),
@@ -94,630 +159,134 @@ class InterviewAgent(BaseInterviewAgent):
             "content": message.content
         })
         
-        # Extract candidate name if not already known
-        if not self.candidate_name and message.sender == "user":
-            self.candidate_name = self._extract_candidate_name(message.content)
-        
-        # Generate appropriate response based on context
-        if message.sender == "user":
-            # Handle candidate response - generate follow-up question
-            response = await self._generate_follow_up_question(message, context)
-        elif message.sender == "system":
-            # Handle system message - start interview or handle setup
-            response = await self._handle_system_message(message, context)
-        else:
-            # Handle other agent messages
-            response = await self._handle_agent_message(message, context)
-        
-        # Update interview context
-        self._update_interview_context(context, response)
-        
-        return response
-    
-    async def _generate_follow_up_question(self, message: AgentMessage, context: InterviewContext) -> AgentResponse:
-        """
-        Generate a follow-up question based on the candidate's response.
-        
-        This method:
-        - Analyzes the candidate's response for key information
-        - Determines the next appropriate question type
-        - Generates a natural, contextual follow-up
-        - Maintains conversation flow and interview progression
-        
-        Args:
-            message: The candidate's response message
-            context: Current interview context
-            
-        Returns:
-            AgentResponse with the follow-up question
-        """
-        # If technical interview: pivot from intro to a coding challenge after the first user response
-        if context.interview_config.interview_type.value == "technical" and self.current_phase == "introduction":
-            coding_prompt = await self._generate_coding_challenge(context)
-            self.question_count += 1
-            self.last_question_time = time.time()
-            self.current_phase = "coding"
-            return self._create_response(
-                content=coding_prompt,
-                confidence=0.9,
-                metadata={
-                    "question_type": "coding_challenge",
-                    "question_number": self.question_count,
-                    "interview_phase": self.current_phase
-                }
-            )
-
-        # Analyze the candidate's response
-        response_analysis = self._analyze_candidate_response(message.content)
-        
-        # Determine next question type based on interview phase and response
-        next_question_type = self._determine_next_question_type(context, response_analysis)
-        
-        # Generate the follow-up question
-        question_content = await self._generate_contextual_question(
-            question_type=next_question_type,
-            context=context,
-            previous_response=message.content,
-            response_analysis=response_analysis
+        # Prepare dependencies with simple types
+        deps = InterviewDeps(
+            interview_type=context.interview_config.interview_type.value,
+            tone=context.interview_config.tone.value,
+            difficulty=context.interview_config.difficulty.value,
+            company_name=context.candidate_info.company_name,
+            role_title=context.candidate_info.role_title,
+            resume_summary=context.candidate_info.resume_text[:1500] if context.candidate_info.resume_text else None,  # First 1500 chars
+            jd_summary=context.candidate_info.job_description[:1500] if context.candidate_info.job_description else None,  # First 1500 chars
+            custom_instructions=context.candidate_info.custom_instructions,
+            conversation_history=self.conversation_history,
+            current_phase=self.current_phase
         )
         
-        # Update question count and timing
-        self.question_count += 1
-        self.last_question_time = time.time()
-        
-        return self._create_response(
-            content=question_content,
-            confidence=0.8,
-            metadata={
-                "question_type": next_question_type,
-                "question_number": self.question_count,
-                "interview_phase": self.current_phase
-            }
-        )
-
-    async def _generate_coding_challenge(self, context: InterviewContext) -> str:
-        """
-        Generate a clear coding challenge prompt for technical interviews.
-        The prompt should include: brief problem statement, function signature, input/output examples,
-        constraints, and directions to use the code editor on the right and ask for hints if needed.
-        """
-        interview_type = context.interview_config.interview_type.value
-        tone = context.interview_config.tone.value
-        difficulty = context.interview_config.difficulty.value
-
-        prompt = f"""
-You are conducting a {interview_type} interview with a {tone} tone at {difficulty} difficulty.
-
-Now transition the candidate into a hands-on coding task. Provide:
-- A concise problem statement suitable for a single function implementation
-- A Python function signature the candidate should implement
-- 2-3 example inputs and outputs
-- Key constraints/edge cases
-- A note to write code in the editor panel and that they can ask for hints or explanations
-
-Keep it focused, concrete, and avoid revealing the full solution.
-"""
-        return await self._generate_question_from_prompt(prompt, "coding_challenge")
-    
-    async def _handle_system_message(self, message: AgentMessage, context: InterviewContext) -> AgentResponse:
-        """
-        Handle system messages for interview setup and control.
-        
-        This method:
-        - Processes interview initialization messages
-        - Handles interview phase transitions
-        - Manages interview configuration updates
-        
-        Args:
-            message: The system message to process
-            context: Current interview context
+        try:
+            # Handle system messages (start interview) specially - build comprehensive context
+            user_content = message.content
             
-        Returns:
-            AgentResponse with appropriate system response
-        """
-        if "start_interview" in message.content.lower():
-            # Generate initial welcome message with simple first question
-            welcome_message = await self._generate_welcome_message(context)
-            
-            return self._create_response(
-                content=welcome_message,
-                confidence=0.9,
-                metadata={"interview_started": True, "phase": "introduction"}
-            )
-        
-        # Handle other system messages
-        return self._create_response(
-            content="Interview system ready.",
-            confidence=0.5,
-            metadata={"system_message": True}
-        )
-    
-    async def _handle_agent_message(self, message: AgentMessage, context: InterviewContext) -> AgentResponse:
-        """
-        Handle messages from other agents in the system.
-        
-        This method:
-        - Processes messages from search, feedback, or summary agents
-        - Integrates external information into the interview flow
-        - Maintains conversation coherence when multiple agents are involved
-        
-        Args:
-            message: The agent message to process
-            context: Current interview context
-            
-        Returns:
-            AgentResponse with appropriate response
-        """
-        # For now, acknowledge other agent messages
-        return self._create_response(
-            content="",  # Empty content to avoid interference
-            confidence=0.1,
-            metadata={"agent_message_processed": True}
-        )
-    
-    def _extract_candidate_name(self, response: str) -> Optional[str]:
-        """
-        Extract the candidate's name from their response.
-        
-        Looks for common name introduction patterns like:
-        - "My name is [Name]"
-        - "I'm [Name]"
-        - "I am [Name]"
-        - "Hi, I'm [Name]"
-        
-        Args:
-            response: The candidate's response text
-            
-        Returns:
-            Extracted name or None if not found
-        """
-        # Common name introduction patterns
-        patterns = [
-            r"my name is (\w+)",
-            r"i'm (\w+)",
-            r"i am (\w+)",
-            r"hi, i'm (\w+)",
-            r"hello, i'm (\w+)",
-            r"hey, i'm (\w+)"
-        ]
-        
-        response_lower = response.lower()
-        for pattern in patterns:
-            match = re.search(pattern, response_lower)
-            if match:
-                return match.group(1).title()
-        
-        return None
-    
-    def _analyze_candidate_response(self, response: str) -> Dict[str, Any]:
-        """
-        Analyze the candidate's response for key information.
-        
-        This method extracts:
-        - Response length and complexity
-        - Technical terms and concepts mentioned
-        - Experience indicators
-        - Confidence level indicators
-        - Specific examples or metrics mentioned
-        
-        Args:
-            response: The candidate's response text
-            
-        Returns:
-            Dictionary with analysis results
-        """
-        analysis = {
-            "length": len(response.split()),
-            "technical_terms": self._extract_technical_terms(response),
-            "experience_indicators": self._extract_experience_indicators(response),
-            "confidence_level": self._assess_confidence_level(response),
-            "specific_examples": self._extract_specific_examples(response),
-            "metrics_mentioned": self._extract_metrics(response)
-        }
-        
-        return analysis
-    
-    def _extract_technical_terms(self, response: str) -> List[str]:
-        """Extract technical terms and concepts from the response."""
-        technical_terms = [
-            "python", "sql", "machine learning", "data science", "algorithm",
-            "model", "analysis", "statistics", "database", "api", "framework",
-            "regression", "classification", "clustering", "neural network",
-            "deep learning", "optimization", "scaling", "performance"
-        ]
-        
-        found_terms = []
-        response_lower = response.lower()
-        for term in technical_terms:
-            if term in response_lower:
-                found_terms.append(term)
-        
-        return found_terms
-    
-    def _extract_experience_indicators(self, response: str) -> List[str]:
-        """Extract experience and project indicators from the response."""
-        experience_indicators = [
-            "worked on", "implemented", "developed", "created", "built",
-            "managed", "led", "supervised", "project", "experience",
-            "previously", "at [company]", "in my role", "responsibility"
-        ]
-        
-        found_indicators = []
-        response_lower = response.lower()
-        for indicator in experience_indicators:
-            if indicator in response_lower:
-                found_indicators.append(indicator)
-        
-        return found_indicators
-    
-    def _assess_confidence_level(self, response: str) -> str:
-        """Assess the confidence level expressed in the response."""
-        confident_indicators = ["confident", "sure", "definitely", "clearly", "obviously"]
-        uncertain_indicators = ["maybe", "perhaps", "might", "could", "not sure", "uncertain"]
-        
-        response_lower = response.lower()
-        confident_count = sum(1 for indicator in confident_indicators if indicator in response_lower)
-        uncertain_count = sum(1 for indicator in uncertain_indicators if indicator in response_lower)
-        
-        if confident_count > uncertain_count:
-            return "confident"
-        elif uncertain_count > confident_count:
-            return "uncertain"
-        else:
-            return "neutral"
-    
-    def _extract_specific_examples(self, response: str) -> List[str]:
-        """Extract specific examples and concrete details from the response."""
-        example_indicators = [
-            "for example", "specifically", "in particular", "such as",
-            "including", "namely", "that is", "i.e.", "e.g."
-        ]
-        
-        examples = []
-        response_lower = response.lower()
-        for indicator in example_indicators:
-            if indicator in response_lower:
-                # Extract the example following the indicator
-                start_idx = response_lower.find(indicator)
-                if start_idx != -1:
-                    # Simple extraction - could be enhanced
-                    example_text = response[start_idx:start_idx + 100]  # Get next 100 chars
-                    examples.append(example_text.strip())
-        
-        return examples
-    
-    def _extract_metrics(self, response: str) -> List[str]:
-        """Extract metrics, numbers, and quantifiable results from the response."""
-        # Look for percentage, numbers, time periods, etc.
-        metrics = re.findall(r'\d+%|\d+ percent|\d+ times|\d+x|\$\d+|\d+ dollars|\d+ weeks|\d+ months', response, re.IGNORECASE)
-        return metrics
-    
-    def _determine_next_question_type(self, context: InterviewContext, response_analysis: Dict[str, Any]) -> str:
-        """
-        Determine the next question type based on interview context and response analysis.
-        
-        This method considers:
-        - Current interview phase
-        - Interview type (technical, behavioral, case study)
-        - Previous question types asked
-        - Candidate's response depth and content
-        - Interview progression and timing
-        
-        Args:
-            context: Current interview context
-            response_analysis: Analysis of the candidate's response
-            
-        Returns:
-            String indicating the next question type
-        """
-        interview_type = context.interview_config.interview_type.value
-        
-        # Determine question type based on interview type and phase
-        if interview_type == "technical":
-            return self._determine_technical_question_type(response_analysis)
-        elif interview_type == "behavioral":
-            return self._determine_behavioral_question_type(response_analysis)
-        elif interview_type == "case_study":
-            return self._determine_case_study_question_type(response_analysis)
-        else:
-            return "general"
-    
-    def _determine_technical_question_type(self, response_analysis: Dict[str, Any]) -> str:
-        """Determine the next technical question type based on response analysis."""
-        # If candidate showed strong technical depth, ask for more detail
-        if len(response_analysis["technical_terms"]) > 3:
-            return "technical_depth"
-        
-        # If candidate mentioned specific technologies, ask about implementation
-        if response_analysis["technical_terms"]:
-            return "technical_implementation"
-        
-        # If candidate showed good problem-solving, ask about optimization
-        if response_analysis["confidence_level"] == "confident":
-            return "technical_optimization"
-        
-        # Default to basic technical question
-        return "technical_basic"
-    
-    def _determine_behavioral_question_type(self, response_analysis: Dict[str, Any]) -> str:
-        """Determine the next behavioral question type based on response analysis."""
-        # If candidate provided specific examples, ask for more detail
-        if response_analysis["specific_examples"]:
-            return "behavioral_depth"
-        
-        # If candidate showed leadership, ask about team management
-        if "led" in response_analysis["experience_indicators"] or "managed" in response_analysis["experience_indicators"]:
-            return "behavioral_leadership"
-        
-        # If candidate mentioned challenges, ask about problem-solving
-        if "challenge" in response_analysis["experience_indicators"]:
-            return "behavioral_challenge"
-        
-        # Default to general behavioral question
-        return "behavioral_general"
-    
-    def _determine_case_study_question_type(self, response_analysis: Dict[str, Any]) -> str:
-        """Determine the next case study question type based on response analysis."""
-        # If candidate showed analytical thinking, ask for more detail
-        if response_analysis["length"] > 100:
-            return "case_study_depth"
-        
-        # If candidate mentioned specific approaches, ask about alternatives
-        if response_analysis["technical_terms"]:
-            return "case_study_alternatives"
-        
-        # If candidate showed confidence, ask about challenges
-        if response_analysis["confidence_level"] == "confident":
-            return "case_study_challenges"
-        
-        # Default to general case study question
-        return "case_study_general"
-    
-    async def _generate_contextual_question(self, question_type: str, context: InterviewContext, 
-                                          previous_response: str, response_analysis: Dict[str, Any]) -> str:
-        """
-        Generate a contextual question based on the question type and analysis.
-        
-        This method:
-        - Uses the LLM to generate natural, contextual questions
-        - Incorporates information from the candidate's previous response
-        - Maintains appropriate interview tone and style
-        - Ensures questions are relevant to the interview type and phase
-        
-        Args:
-            question_type: Type of question to generate
-            context: Current interview context
-            previous_response: The candidate's previous response
-            response_analysis: Analysis of the candidate's response
-            
-        Returns:
-            Generated question text
-        """
-        # Build context prompt for the LLM
-        prompt = self._build_question_generation_prompt(
-            question_type=question_type,
-            context=context,
-            previous_response=previous_response,
-            response_analysis=response_analysis
-        )
-        
-        # Generate question using LLM (simplified for now)
-        # In a real implementation, this would call the configured LLM
-        question = await self._generate_question_from_prompt(prompt, question_type)
-        
-        return question
-    
-    def _build_question_generation_prompt(self, question_type: str, context: InterviewContext,
-                                        previous_response: str, response_analysis: Dict[str, Any]) -> str:
-        """
-        Build a prompt for generating contextual questions.
-        
-        This method constructs a comprehensive prompt that includes:
-        - Interview type and context
-        - Previous candidate response
-        - Response analysis results
-        - Desired question type and style
-        - Interview tone and difficulty level
-        
-        Args:
-            question_type: Type of question to generate
-            context: Current interview context
-            previous_response: The candidate's previous response
-            response_analysis: Analysis of the candidate's response
-            
-        Returns:
-            Formatted prompt string
-        """
-        interview_type = context.interview_config.interview_type.value
-        tone = context.interview_config.tone.value
-        difficulty = context.interview_config.difficulty.value
-        
-        prompt = f"""
-        You are conducting a {interview_type} interview with a {tone} tone at {difficulty} difficulty level.
-        
-        The candidate just responded: "{previous_response}"
-        
-        Response analysis:
-        - Length: {response_analysis['length']} words
-        - Technical terms: {', '.join(response_analysis['technical_terms'])}
-        - Confidence: {response_analysis['confidence_level']}
-        - Specific examples: {len(response_analysis['specific_examples'])} provided
-        
-        Based on their response, generate a specific, contextual {question_type} question that:
-        1. References specific details they mentioned (technologies, projects, experiences)
-        2. Asks for concrete examples or deeper explanations
-        3. Maintains a {tone} tone
-        4. Is appropriate for {difficulty} difficulty
-        5. Encourages detailed, specific responses
-        
-        IMPORTANT: Do NOT use placeholder text like [specific technology] or [programming language]. Instead, reference actual technologies, tools, or concepts they mentioned, or ask about specific aspects of their experience.
-        
-        If they didn't give enough information for you to ask an intelligent question, ask for more details.
-        
-        TECHNICAL INTERVIEW CONSTRAINTS:
-        - If this is a technical interview (especially during a coding task), DO NOT ask behavioral questions like "Tell me about a time..." or STAR-style prompts.
-        - Focus strictly on the ongoing coding problem, solution correctness, complexity (Big-O), tests, edge cases, and improvements/refactoring.
-        - Prefer short, targeted guidance or questions (e.g., "What is the complexity?", "How would you handle empty input?", "Can you write a quick test?").
-        - If the solution works but is not ideal, ask "How could you improve or optimize this?" rather than any behavioral follow-ups.
-        
-        Question:"""
-        
-        return prompt
-    
-    async def _generate_question_from_prompt(self, prompt: str, question_type: str) -> str:
-        """
-        Generate a question from the prompt using the configured LLM.
-        
-        This method:
-        - Calls the configured LLM (OpenAI, Anthropic, etc.)
-        - Handles API responses and errors
-        - Applies response formatting and validation
-        
-        Args:
-            prompt: The prompt to send to the LLM
-            question_type: Type of question being generated
-            
-        Returns:
-            Generated question text
-        """
-        if self.llm_config.provider.value == "openai":
-            import openai
-            print(f"DEBUG: Using OpenAI with model {self.llm_config.model}")
-            client = openai.OpenAI(api_key=self.llm_config.api_key)
-            
-            response = client.chat.completions.create(
-                model=self.llm_config.model,
-                messages=[
-                    {"role": "system", "content": "You are an expert interviewer. Generate natural, conversational questions based on the given prompt. Keep responses concise and professional. NEVER use placeholder text like [specific technology] or [programming language]. Always reference actual details mentioned by the candidate or ask specific, concrete questions."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=150,
-                temperature=0.7
-            )
-            
-            result = response.choices[0].message.content.strip()
-            print(f"DEBUG: OpenAI response: {result}")
-            return result
-            
-        elif self.llm_config.provider.value == "anthropic":
-            import anthropic
-            print(f"DEBUG: Using Anthropic with model {self.llm_config.model}")
-            client = anthropic.Anthropic(api_key=self.llm_config.api_key)
-            
-            response = client.messages.create(
-                model=self.llm_config.model,
-                max_tokens=150,
-                temperature=0.7,
-                messages=[
-                    {"role": "user", "content": f"System: You are an expert interviewer. Generate natural, conversational questions based on the given prompt. Keep responses concise and professional. NEVER use placeholder text like [specific technology] or [programming language]. Always reference actual details mentioned by the candidate or ask specific, concrete questions.\n\nUser: {prompt}"}
+            if message.sender == "system" and "start_interview" in message.content.lower() and not self.context_initialized:
+                # Build rich initial context that will be remembered throughout the interview
+                context_parts = [
+                    "=== INTERVIEW CONTEXT ===",
+                    f"Company: {deps.company_name or 'Not specified'}",
+                    f"Role: {deps.role_title or 'Not specified'}",
+                    f"Interview Type: {deps.interview_type}",
+                    f"Tone: {deps.tone}",
+                    f"Difficulty: {deps.difficulty}"
                 ]
+                
+                if deps.resume_summary:
+                    context_parts.append(f"\n=== CANDIDATE BACKGROUND ===\n{deps.resume_summary}")
+                
+                if deps.jd_summary:
+                    context_parts.append(f"\n=== JOB REQUIREMENTS ===\n{deps.jd_summary}")
+                
+                if deps.custom_instructions:
+                    context_parts.append(f"\n=== SPECIAL INSTRUCTIONS ===\n{deps.custom_instructions}")
+                
+                context_parts.append("\n=== YOUR TASK ===")
+                context_parts.append("Begin the interview with an appropriate opening question for this specific role and company.")
+                context_parts.append("Remember this context for the entire interview - if the candidate asks about the role or company, refer to this information.")
+                
+                user_content = "\n".join(context_parts)
+                self.current_phase = "introduction"
+                self.context_initialized = True
+            
+            # Run the agent with full message history to maintain context
+            result = await self.pydantic_agent.run(
+                user_content, 
+                deps=deps,
+                message_history=self.pydantic_message_history if self.pydantic_message_history else None
             )
             
-            result = response.content[0].text.strip()
-            print(f"DEBUG: Anthropic response: {result}")
-            return result
+            # Extract the response content
+            response_content = result.output if hasattr(result, 'output') else str(result)
             
-        else:
-            raise ValueError(f"Unknown provider {self.llm_config.provider.value}")
-    
-    async def _generate_welcome_message(self, context: InterviewContext) -> str:
-        """
-        Generate a welcome message for the interview using the LLM.
-        
-        This method creates a personalized welcome message that:
-        - Introduces the interviewer with a neutral name
-        - Sets the interview context and expectations
-        - Creates a professional but approachable tone
-        - Includes a simple "Tell me about yourself" question
-        - Mentions the interview type and company/role if available
-        
-        Args:
-            context: Current interview context
+            # Update pydantic-ai message history to maintain context for next turn
+            # The result contains the full message exchange
+            if hasattr(result, 'all_messages'):
+                self.pydantic_message_history = result.all_messages()
+            elif hasattr(result, 'messages'):
+                self.pydantic_message_history = result.messages
             
-        Returns:
-            Welcome message text with first question
-        """
-        interview_type = context.interview_config.interview_type.value
-        tone = context.interview_config.tone.value
-        
-        # Get company and role information if available
-        company_name = getattr(context.candidate_info, 'company_name', None)
-        role_title = getattr(context.candidate_info, 'role_title', None)
-        
-        # Choose a neutral interviewer name
-        interviewer_names = ["Jordan", "Alex", "Casey", "Taylor"]
-        interviewer_name = interviewer_names[hash(context.session_id) % len(interviewer_names)]
-        
-        # Build the prompt for the LLM
-        prompt_parts = [
-            f"You are {interviewer_name}, an expert interviewer conducting a {interview_type} interview.",
-            f"Interview tone: {tone}",
-            f"Interview type: {interview_type}"
-        ]
-        
-        if company_name and role_title:
-            prompt_parts.append(f"Company: {company_name}")
-            prompt_parts.append(f"Position: {role_title}")
-        elif role_title:
-            prompt_parts.append(f"Position: {role_title}")
-        
-        prompt_parts.extend([
-            "Generate a natural, conversational welcome message that:",
-            "1. Introduces yourself by name",
-            "2. If company and role information is provided, include it in your introduction (e.g., 'I'm Jordan, a Data Science Manager here at Netflix')",
-            "3. Mentions the interview type",
-            "4. Sets a professional but approachable tone",
-            "5. Expresses enthusiasm for the conversation",
-            "6. Ends with a simple question: 'Tell me about yourself'",
-            "7. Keeps it concise (2-3 sentences max)",
-            "",
-            "IMPORTANT: Do NOT use placeholder text like [Company Name/Role] or [Position]. If company/role information is available, use the actual names. If not available, simply mention the interview type without placeholders.",
-            "",
-            "CRITICAL: If no specific company or role information is provided, do NOT use placeholders. Simply say something like 'I'll be conducting your technical interview today' without any brackets or placeholders.",
-            "",
-            "Write only the welcome message with the question, no additional text:"
-        ])
-        
-        prompt = "\n".join(prompt_parts)
-        print(f"DEBUG: Welcome message prompt: {prompt}")
-        
-        return await self._generate_question_from_prompt(prompt, "welcome")
+            # Update our internal context
+            context.add_turn({
+                "timestamp": time.time(),
+                "speaker": "interviewer",
+                "content": response_content,
+                "message_type": "question"
+            })
+            
+            return self._create_response(
+                content=response_content,
+                confidence=0.9,
+                metadata={"phase": self.current_phase}
+            )
+            
+        except Exception as e:
+            print(f"Error in InterviewAgent: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._create_response(
+                content="I apologize, but I encountered an error. Could you please repeat that?",
+                confidence=0.0,
+                metadata={"error": str(e)}
+            )
     
-    def _update_interview_context(self, context: InterviewContext, response: AgentResponse):
-        """
-        Update the interview context with the generated response.
-        
-        This method:
-        - Updates conversation history
-        - Tracks interview progression
-        - Updates phase information
-        - Maintains timing and question counts
-        
-        Args:
-            context: Current interview context
-            response: The generated response to record
-        """
-        # Update conversation history in context
-        context.add_turn({
-            "timestamp": time.time(),
-            "speaker": "interviewer",
-            "content": response.content,
-            "message_type": "question",
-            "metadata": response.metadata
-        })
-        
-        # Update interview phase if needed
-        if "phase" in response.metadata:
-            self.current_phase = response.metadata["phase"]
-    
-    def update_configuration(self, llm_config: LLMConfig):
-        """
-        Update the agent's LLM configuration.
-        
-        This method allows dynamic configuration updates during the interview,
-        such as switching models or adjusting parameters.
-        
-        Args:
-            llm_config: New LLM configuration
-        """
+    def update_configuration(self, llm_config: LLMConfig, interview_config: InterviewConfig):
+        """Update LLM and interview configuration."""
         self.llm_config = llm_config
+        self.interview_config = interview_config
+        if llm_config.provider.value == "openai":
+            model = OpenAIModel(llm_config.model)
+        elif llm_config.provider.value == "anthropic":
+            model = AnthropicModel(llm_config.model)
+        else:
+            return
+
+        # Reset message history when reconfiguring
+        self.pydantic_message_history = []
+        self.context_initialized = False
+        
+        self.pydantic_agent = Agent(
+            model,
+            deps_type=InterviewDeps,
+            system_prompt="""
+You are an expert interviewer conducting a professional interview.
+
+CRITICAL: You will receive context about the role, company, candidate background, and job requirements in your first message. 
+Remember this context throughout the ENTIRE interview. When the candidate asks about the role or company, refer to this context.
+
+YOUR ROLE:
+- Conduct a professional, realistic interview for the specific role and company provided.
+- Ask relevant follow-up questions based on the candidate's responses.
+- Dig deeper into their experience using specific examples they provide.
+- React naturally - question mismatches, probe vague claims, show curiosity about strengths.
+- If this is a behavioral interview, use STAR method probes.
+- If this is a case study, guide them through the problem structuredly.
+
+GUIDELINES:
+- Keep your responses concise (usually 1-3 sentences/questions).
+- Do NOT repeat yourself.
+- Do NOT be overly encouraging or repetitive with praise.
+- Move the interview forward with each turn.
+- If the candidate asks for clarification about the role/company, refer to the context you were given.
+- Question irrelevant experience directly (e.g., if they mention botany for an ML role, ask about the connection).
+
+Adapt your questioning style based on the interview context and candidate responses.
+"""
+        )
+

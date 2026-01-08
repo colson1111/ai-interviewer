@@ -46,29 +46,23 @@ class OrchestratorAgent(BaseInterviewAgent):
         start_time = time.time()
         
         try:
-            print(f"########## ORCHESTRATOR: Starting to process message: {message.content[:50]}...")
             
             # Step 1: Analyze message and determine routing
             routing_decision = self._route_message(message, context)
             self.routing_history.append(routing_decision)
-            print(f"########## ORCHESTRATOR: Routing decision made: {routing_decision}")
             
             # Log when SearchAgent is being used
             if routing_decision.primary_agent == "search" or "search" in routing_decision.supporting_agents:
-                print(f"########## ORCHESTRATOR: SearchAgent selected - primary: {routing_decision.primary_agent}, supporting: {routing_decision.supporting_agents}")
+                pass
             
         # Step 2: Execute agents (but constrain by interview type to avoid cross-type drift)
             agent_responses = await self._execute_agents(message, context, routing_decision)
-            print(f"########## ORCHESTRATOR: Agent responses collected: {len(agent_responses)}")
             
             # Step 3: Combine responses
             combined_response = self._combine_responses(agent_responses, routing_decision, context)
-            print(f"########## ORCHESTRATOR: Combined response: {combined_response.content[:50]}...")
             
             # Step 4: Update context
-            print("########## ORCHESTRATOR: Updating context...")
             self._update_context(context, message, combined_response.content)
-            print("########## ORCHESTRATOR: Context updated successfully")
             
             response_time = time.time() - start_time
             
@@ -79,11 +73,9 @@ class OrchestratorAgent(BaseInterviewAgent):
             )
             self.update_performance_metrics(temp_response, response_time)
             
-            print(f"########## ORCHESTRATOR: Returning combined response: {combined_response.content[:50]}...")
             return combined_response
             
         except Exception as e:
-            print(f"########## ORCHESTRATOR: Exception caught: {e}")
             import traceback
             traceback.print_exc()
             # Fallback response on error
@@ -122,18 +114,6 @@ class OrchestratorAgent(BaseInterviewAgent):
     ):
         """Enhance routing decision based on context and message."""
         
-        # Force technical interviews to use the dedicated technical agent
-        try:
-            if context.interview_config.interview_type.value == "technical":
-                routing_decision.primary_agent = "technical_interviewer"
-                # Remove general interviewer from supporting agents to avoid long behavioral prompts
-                routing_decision.supporting_agents = [
-                    a for a in routing_decision.supporting_agents if a != "interview"
-                ]
-        except Exception:
-            # If context is missing fields, fail open and continue
-            pass
-
         # Always include feedback agent for user responses
         if (message.message_type.value == "user_response" and 
             "feedback" not in routing_decision.supporting_agents and
@@ -154,46 +134,29 @@ class OrchestratorAgent(BaseInterviewAgent):
         
         responses = []
         
-        print(f"########## ORCHESTRATOR: Executing agents")
-        print(f"########## ORCHESTRATOR: primary={routing_decision.primary_agent}, supporting={routing_decision.supporting_agents}")
-        
-        # Restrict agents by interview type for cleaner behavior
-        itype = context.interview_config.interview_type.value
-
         # Execute primary agent
         primary_agent = self.registry.get_agent(routing_decision.primary_agent)
-        print(f"########## ORCHESTRATOR: Primary agent found: {primary_agent is not None}")
         if primary_agent and primary_agent.is_enabled:
             try:
-                print(f"########## ORCHESTRATOR: Processing with primary agent: {routing_decision.primary_agent}")
                 response = await primary_agent.process(message, context)
-                print(f"########## ORCHESTRATOR: Primary agent response: {response.content[:100]}...")
                 responses.append(response)
             except Exception as e:
-                print(f"########## ORCHESTRATOR: Error in primary agent {routing_decision.primary_agent}: {e}")
+                print(f"Error in primary agent {routing_decision.primary_agent}: {e}")
                 import traceback
                 traceback.print_exc()
         
         # Execute supporting agents
         for agent_name in routing_decision.supporting_agents:
-            # For technical interviews, avoid behavioral agent usage by name
-            if itype == "technical" and agent_name in {"interview"}:  # legacy general interviewer
-                # we'll still allow 'search' and 'summary'
-                continue
             agent = self.registry.get_agent(agent_name)
-            print(f"########## ORCHESTRATOR: Supporting agent {agent_name} found: {agent is not None}")
             if agent and agent.is_enabled:
                 try:
-                    print(f"########## ORCHESTRATOR: Processing with supporting agent: {agent_name}")
                     response = await agent.process(message, context)
-                    print(f"########## ORCHESTRATOR: Supporting agent response: {response.content[:100]}...")
                     responses.append(response)
                 except Exception as e:
-                    print(f"########## ORCHESTRATOR: Error in supporting agent {agent_name}: {e}")
+                    print(f"Error in supporting agent {agent_name}: {e}")
                     import traceback
                     traceback.print_exc()
         
-        print(f"########## ORCHESTRATOR: Total responses collected: {len(responses)}")
         return responses
     
     def _combine_responses(
@@ -300,10 +263,8 @@ class OrchestratorAgent(BaseInterviewAgent):
             )
             context.add_turn(interviewer_turn)
             
-            print("########## ORCHESTRATOR: Context updated successfully")
-            
         except Exception as e:
-            print(f"########## ORCHESTRATOR: Error updating context: {e}")
+            print(f"Error updating context: {e}")
             import traceback
             traceback.print_exc()
     
@@ -324,9 +285,9 @@ class OrchestratorAgent(BaseInterviewAgent):
             if message_count <= 2:
                 context.current_phase = InterviewPhase.INTRODUCTION
             elif message_count <= 5:
-                context.current_phase = InterviewPhase.TECHNICAL_QUESTIONS
-            else:
                 context.current_phase = InterviewPhase.BEHAVIORAL_QUESTIONS
+            else:
+                context.current_phase = InterviewPhase.CASE_STUDY
     
     def get_routing_history(self) -> List[RoutingDecision]:
         """Get the history of routing decisions."""
