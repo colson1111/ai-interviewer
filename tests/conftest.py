@@ -4,20 +4,30 @@ Shared test fixtures and configuration for the AI Interviewer test suite.
 
 import os
 import time
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from interviewer.config import (
-    LLMConfig, InterviewConfig, LLMProvider, InterviewType, Tone, Difficulty
+    Difficulty,
+    InterviewConfig,
+    InterviewType,
+    LLMConfig,
+    LLMProvider,
+    Tone,
 )
 from interviewer.core import (
-    InterviewContext, CandidateInfo, AgentMessage, AgentResponse, MessageType
+    AgentMessage,
+    AgentResponse,
+    CandidateInfo,
+    InterviewContext,
+    MessageType,
 )
-
 
 # ============================================================================
 # Markers
 # ============================================================================
+
 
 def pytest_configure(config):
     """Register custom markers."""
@@ -29,7 +39,9 @@ def pytest_configure(config):
 def pytest_collection_modifyitems(config, items):
     """Skip live_llm tests unless RUN_LIVE_LLM_TESTS=1 is set."""
     if os.environ.get("RUN_LIVE_LLM_TESTS", "0") != "1":
-        skip_live = pytest.mark.skip(reason="Set RUN_LIVE_LLM_TESTS=1 to run live LLM tests")
+        skip_live = pytest.mark.skip(
+            reason="Set RUN_LIVE_LLM_TESTS=1 to run live LLM tests"
+        )
         for item in items:
             if "live_llm" in item.keywords:
                 item.add_marker(skip_live)
@@ -39,14 +51,12 @@ def pytest_collection_modifyitems(config, items):
 # Configuration Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def openai_llm_config():
     """Create an OpenAI LLM configuration."""
     return LLMConfig(
-        provider=LLMProvider.OPENAI,
-        model="gpt-4o",
-        temperature=0.7,
-        max_tokens=1000
+        provider=LLMProvider.OPENAI, model="gpt-4o", temperature=0.7, max_tokens=1000
     )
 
 
@@ -57,7 +67,7 @@ def anthropic_llm_config():
         provider=LLMProvider.ANTHROPIC,
         model="claude-sonnet-4-20250514",
         temperature=0.7,
-        max_tokens=1000
+        max_tokens=1000,
     )
 
 
@@ -67,13 +77,14 @@ def interview_config():
     return InterviewConfig(
         interview_type=InterviewType.BEHAVIORAL,
         tone=Tone.PROFESSIONAL,
-        difficulty=Difficulty.MEDIUM
+        difficulty=Difficulty.MEDIUM,
     )
 
 
 # ============================================================================
 # Context Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def candidate_info():
@@ -86,7 +97,7 @@ def candidate_info():
         role_title="Senior ML Engineer",
         skills_mentioned=["Python", "Machine Learning", "TensorFlow"],
         companies_mentioned=["Previous Corp"],
-        technologies_mentioned=["Python", "TensorFlow", "Docker"]
+        technologies_mentioned=["Python", "TensorFlow", "Docker"],
     )
 
 
@@ -97,13 +108,14 @@ def interview_context(openai_llm_config, interview_config, candidate_info):
         session_id="test_session_123",
         llm_config=openai_llm_config,
         interview_config=interview_config,
-        candidate_info=candidate_info
+        candidate_info=candidate_info,
     )
 
 
 # ============================================================================
 # Message Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def sample_user_message():
@@ -114,7 +126,7 @@ def sample_user_message():
         metadata={},
         sender="user",
         timestamp=time.time(),
-        session_id="test_session_123"
+        session_id="test_session_123",
     )
 
 
@@ -127,7 +139,7 @@ def sample_system_message():
         metadata={},
         sender="system",
         timestamp=time.time(),
-        session_id="test_session_123"
+        session_id="test_session_123",
     )
 
 
@@ -135,18 +147,19 @@ def sample_system_message():
 # Mock Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def mock_pydantic_agent():
     """Create a mock pydantic-ai agent."""
     mock_agent = MagicMock()
-    
+
     # Mock the run method to return a mock result
     mock_result = MagicMock()
     mock_result.output = "That's an interesting experience! Can you tell me more about a specific challenge you faced while leading that team?"
     mock_result.all_messages = []
-    
+
     mock_agent.run = AsyncMock(return_value=mock_result)
-    
+
     return mock_agent
 
 
@@ -160,6 +173,5 @@ def mock_agent_response():
         requires_followup=False,
         metadata={"phase": "behavioral"},
         next_suggested_agents=[],
-        cost_info={"tokens": 100}
+        cost_info={"tokens": 100},
     )
-

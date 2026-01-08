@@ -2,12 +2,12 @@
 
 from .assessors import ResponseAssessor
 from .classifiers import ResponseClassifier
-from .generators import FeedbackGenerator
 from .contextual import ContextualFeedback
+from .generators import FeedbackGenerator
 
 __all__ = [
     "ResponseAssessor",
-    "ResponseClassifier", 
+    "ResponseClassifier",
     "FeedbackGenerator",
-    "ContextualFeedback"
-] 
+    "ContextualFeedback",
+]
