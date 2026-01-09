@@ -25,9 +25,10 @@ class TestPromptConstants:
 
     def test_base_prompt_contains_key_instructions(self):
         """Test that base prompt contains critical instructions."""
-        assert "CRITICAL CONTEXT RULES" in BASE_PROMPT
+        assert "CRITICAL FORMATTING RULES" in BASE_PROMPT
         assert "company name" in BASE_PROMPT.lower()
         assert "role" in BASE_PROMPT.lower()
+        assert "markdown" in BASE_PROMPT.lower()  # No markdown formatting
 
     def test_tone_modifiers_all_defined(self):
         """Test that all tone modifiers are defined."""
@@ -94,7 +95,7 @@ class TestBuildSystemPrompt:
         )
 
         # Should contain key parts of base prompt
-        assert "CRITICAL CONTEXT RULES" in prompt
+        assert "CRITICAL FORMATTING RULES" in prompt
 
     def test_build_prompt_includes_tone(self):
         """Test that built prompt includes tone modifier."""
