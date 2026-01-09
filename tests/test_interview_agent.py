@@ -394,7 +394,7 @@ class TestBuildSystemPrompt:
         interview_config = InterviewConfig()
         agent = InterviewAgent(llm_config, interview_config)
 
-        prompt = agent._build_system_prompt("behavioral")
+        prompt = agent._build_system_prompt("behavioral", "professional", "medium")
 
         assert "markdown" in prompt.lower()
         assert "never" in prompt.lower() or "no" in prompt.lower()
@@ -409,7 +409,7 @@ class TestBuildSystemPrompt:
         interview_config = InterviewConfig()
         agent = InterviewAgent(llm_config, interview_config)
 
-        prompt = agent._build_system_prompt("behavioral")
+        prompt = agent._build_system_prompt("behavioral", "professional", "medium")
 
         assert "STAR" in prompt
 
@@ -423,10 +423,36 @@ class TestBuildSystemPrompt:
         interview_config = InterviewConfig()
         agent = InterviewAgent(llm_config, interview_config)
 
-        prompt = agent._build_system_prompt("case_study")
+        prompt = agent._build_system_prompt("case_study", "professional", "medium")
 
         assert "scenario" in prompt.lower()
         assert "brief" in prompt.lower()
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_system_prompt_includes_tone(self, mock_agent_class, mock_openai_model):
+        """Test that system prompt includes tone modifier."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        prompt = agent._build_system_prompt("behavioral", "challenging", "medium")
+
+        assert "direct" in prompt.lower() or "probe" in prompt.lower()
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_system_prompt_includes_difficulty(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that system prompt includes difficulty modifier."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        prompt = agent._build_system_prompt("behavioral", "professional", "hard")
+
+        assert "Hard" in prompt or "HARD" in prompt
 
 
 # ============================================================================

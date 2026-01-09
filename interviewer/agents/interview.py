@@ -13,7 +13,7 @@ from pydantic_ai.models.openai import OpenAIModel
 
 from ..config import InterviewConfig, LLMConfig
 from ..core import AgentCapability, AgentMessage, AgentResponse, InterviewContext
-from ..prompts import INTERVIEW_TYPE_GUIDANCE
+from ..prompts import build_system_prompt
 from .base import BaseInterviewAgent
 
 
@@ -103,33 +103,11 @@ class InterviewAgent(BaseInterviewAgent):
         # Initialize the LLM model and agent
         self._initialize_agent(llm_config, interview_config)
 
-    def _build_system_prompt(self, interview_type: str) -> str:
-        """Build interview-type-specific system prompt."""
-        # Get the detailed guidance for this interview type
-        type_guidance = INTERVIEW_TYPE_GUIDANCE.get(
-            interview_type, INTERVIEW_TYPE_GUIDANCE["behavioral"]
-        )
-
-        return f"""You are an expert interviewer conducting a professional interview.
-
-CRITICAL FORMATTING:
-- NEVER use markdown formatting. No asterisks, no bullet points, no bold, no lists.
-- Write in natural spoken language. Your text will be read aloud by text-to-speech.
-- Keep responses brief and conversational, like you're actually talking to someone.
-
-CONTEXT:
-You will receive context about the role, company, and candidate in your first message.
-Remember this context throughout the interview.
-
-{type_guidance}
-
-GENERAL STYLE:
-- Keep responses concise, typically 1-3 sentences.
-- One question at a time, then wait.
-- Do NOT repeat yourself.
-- Do NOT be overly encouraging or repetitive.
-- React naturally to what the candidate says.
-"""
+    def _build_system_prompt(
+        self, interview_type: str, tone: str, difficulty: str
+    ) -> str:
+        """Build interview-type-specific system prompt using prompts module."""
+        return build_system_prompt(interview_type, tone, difficulty)
 
     def _build_initial_context(self, deps: InterviewDeps) -> str:
         """Build the initial context message based on interview type."""
@@ -295,7 +273,11 @@ GENERAL STYLE:
             raise ValueError(f"Unsupported provider: {llm_config.provider}")
 
         # Build interview-type-specific system prompt
-        system_prompt = self._build_system_prompt(interview_config.interview_type.value)
+        system_prompt = self._build_system_prompt(
+            interview_config.interview_type.value,
+            interview_config.tone.value,
+            interview_config.difficulty.value,
+        )
 
         # Create Pydantic-AI agent with interview-type-specific prompt
         self.pydantic_agent = Agent(
