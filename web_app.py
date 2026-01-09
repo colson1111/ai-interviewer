@@ -3,70 +3,51 @@ AI-powered mock interview application with multi-agent system.
 
 This application provides:
 - Real-time interview conversations with AI agents
-- Multi-agent coordination (interview, search, feedback, summary)
+- Multi-agent coordination (interview, search, summary, evaluation)
 - WebSocket-based communication
 - Cost tracking and monitoring
 - File upload and processing
 - TTS and STT capabilities
 """
 
-import os
 import json
-import asyncio
+import os
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional, List
-from pathlib import Path
-from openai import OpenAI
+from typing import Dict, Optional
 
+from dotenv import load_dotenv
 from fastapi import (
     FastAPI,
-    WebSocket,
-    WebSocketDisconnect,
+    File,
+    Form,
     HTTPException,
     Request,
-    Form,
-    File,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from dotenv import load_dotenv
-
-from interviewer.config import (
-    LLMConfig,
-    InterviewConfig,
-    LLMProvider,
-    InterviewType,
-    Tone,
-    Difficulty,
-)
-from interviewer.core import InterviewContext, CandidateInfo
-from interviewer.document_parser import create_document_context
-from interviewer.multi_agent_system import create_multi_agent_interview_system
-from interviewer.cost_tracker import CostTracker
-
+from openai import OpenAI
 
 # Load environment variables from .env_local
 # override=True ensures .env_local values take precedence over shell environment
 load_dotenv(".env_local", override=True)
 
-# Import our existing interviewer components
 from interviewer.config import (
-    LLMConfig,
-    InterviewConfig,
-    LLMProvider,
-    InterviewType,
-    Tone,
     Difficulty,
+    InterviewConfig,
+    InterviewType,
+    LLMConfig,
+    LLMProvider,
+    Tone,
 )
-from interviewer.multi_agent_system import create_multi_agent_interview_system
-from interviewer.document_parser import create_document_context
+from interviewer.core import CandidateInfo, InterviewContext
 from interviewer.cost_tracker import CostTracker, estimate_tokens_detailed
-from interviewer.core import InterviewContext, CandidateInfo, InterviewPhase
-import sys
-import tempfile
+from interviewer.document_parser import create_document_context
+from interviewer.multi_agent_system import create_multi_agent_interview_system
 
 
 async def detect_user_intent(user_message: str, session) -> str:
@@ -294,8 +275,9 @@ async def _process_uploaded_file(file: UploadFile) -> str:
 
         if file.filename.endswith(".pdf"):
             # Process PDF file
-            from PyPDF2 import PdfReader
             import io
+
+            from PyPDF2 import PdfReader
 
             pdf_reader = PdfReader(io.BytesIO(content))
             text = ""
@@ -305,8 +287,9 @@ async def _process_uploaded_file(file: UploadFile) -> str:
 
         elif file.filename.endswith(".docx"):
             # Process DOCX file
-            from docx import Document
             import io
+
+            from docx import Document
 
             doc = Document(io.BytesIO(content))
             text = ""
