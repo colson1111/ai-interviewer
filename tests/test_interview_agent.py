@@ -377,6 +377,236 @@ class TestInterviewAgentContext:
 
 
 # ============================================================================
+# Test _build_system_prompt Method
+# ============================================================================
+
+
+class TestBuildSystemPrompt:
+    """Tests for _build_system_prompt method."""
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_system_prompt_includes_no_markdown_rule(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that system prompt includes no-markdown rule."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        prompt = agent._build_system_prompt("behavioral")
+
+        assert "markdown" in prompt.lower()
+        assert "never" in prompt.lower() or "no" in prompt.lower()
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_system_prompt_behavioral_includes_star(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that behavioral system prompt includes STAR method."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        prompt = agent._build_system_prompt("behavioral")
+
+        assert "STAR" in prompt
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_system_prompt_case_study_includes_scenario(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that case study system prompt includes scenario guidance."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        prompt = agent._build_system_prompt("case_study")
+
+        assert "scenario" in prompt.lower()
+        assert "brief" in prompt.lower()
+
+
+# ============================================================================
+# Test _build_initial_context Method
+# ============================================================================
+
+
+class TestBuildInitialContext:
+    """Tests for _build_initial_context method."""
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_behavioral_context_mentions_resume(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that behavioral initial context references resume."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig(interview_type=InterviewType.BEHAVIORAL)
+        agent = InterviewAgent(llm_config, interview_config)
+
+        deps = InterviewDeps(
+            interview_type="behavioral",
+            tone="professional",
+            difficulty="medium",
+            company_name="TestCorp",
+            role_title="Data Scientist",
+            resume_summary="5 years of Python experience",
+            jd_summary="Looking for ML engineer",
+            custom_instructions=None,
+            conversation_history=[],
+            current_phase="introduction",
+        )
+
+        context = agent._build_initial_context(deps)
+
+        assert "BEHAVIORAL" in context
+        assert "resume" in context.lower() or "past" in context.lower()
+        assert "TestCorp" in context
+        assert "Data Scientist" in context
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_case_study_context_emphasizes_brevity(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that case study initial context emphasizes brevity."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig(interview_type=InterviewType.CASE_STUDY)
+        agent = InterviewAgent(llm_config, interview_config)
+
+        deps = InterviewDeps(
+            interview_type="case_study",
+            tone="professional",
+            difficulty="medium",
+            company_name="TestCorp",
+            role_title="Data Scientist",
+            resume_summary=None,
+            jd_summary="Customer churn modeling",
+            custom_instructions=None,
+            conversation_history=[],
+            current_phase="introduction",
+        )
+
+        context = agent._build_initial_context(deps)
+
+        assert "CASE STUDY" in context
+        # Should emphasize keeping it short
+        assert "brief" in context.lower() or "short" in context.lower()
+        # Should NOT ask about resume
+        assert "DO NOT ask about" in context or "don't ask about" in context.lower()
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_case_study_context_no_markdown_rule(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that case study context includes no-markdown rule."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig(interview_type=InterviewType.CASE_STUDY)
+        agent = InterviewAgent(llm_config, interview_config)
+
+        deps = InterviewDeps(
+            interview_type="case_study",
+            tone="professional",
+            difficulty="medium",
+            company_name="TestCorp",
+            role_title="Data Scientist",
+            resume_summary=None,
+            jd_summary=None,
+            custom_instructions=None,
+            conversation_history=[],
+            current_phase="introduction",
+        )
+
+        context = agent._build_initial_context(deps)
+
+        assert "markdown" in context.lower()
+
+
+# ============================================================================
+# Test _generate_case_study_hint Method
+# ============================================================================
+
+
+class TestGenerateCaseStudyHint:
+    """Tests for _generate_case_study_hint method."""
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_hint_with_churn_keyword(self, mock_agent_class, mock_openai_model):
+        """Test that churn in JD generates churn-related hint."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        hint = agent._generate_case_study_hint(
+            "We need someone to work on customer churn prediction models",
+            "TestCorp",
+            "Data Scientist",
+        )
+
+        assert "churn" in hint.lower()
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_hint_with_forecast_keyword(self, mock_agent_class, mock_openai_model):
+        """Test that forecast in JD generates forecasting hint."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        hint = agent._generate_case_study_hint(
+            "Experience with demand forecasting and time series",
+            "RetailCo",
+            "ML Engineer",
+        )
+
+        assert "forecast" in hint.lower()
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_hint_with_no_jd(self, mock_agent_class, mock_openai_model):
+        """Test hint generation when no JD is provided."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        hint = agent._generate_case_study_hint(None, "TestCorp", "Data Scientist")
+
+        # Should still generate a reasonable hint
+        assert "Data Scientist" in hint or "TestCorp" in hint
+        assert len(hint) > 20
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_hint_with_multiple_keywords(self, mock_agent_class, mock_openai_model):
+        """Test hint with multiple relevant keywords."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig()
+        agent = InterviewAgent(llm_config, interview_config)
+
+        hint = agent._generate_case_study_hint(
+            "Work on customer segmentation, A/B testing, and recommendation systems",
+            "TechCorp",
+            "Senior DS",
+        )
+
+        # Should detect multiple themes
+        hint_lower = hint.lower()
+        keywords_found = sum(
+            [
+                "segment" in hint_lower,
+                "a/b" in hint_lower or "experiment" in hint_lower,
+                "recommend" in hint_lower,
+            ]
+        )
+        assert keywords_found >= 2  # Should detect at least 2 themes
+
+
+# ============================================================================
 # Live LLM Tests (Optional)
 # ============================================================================
 

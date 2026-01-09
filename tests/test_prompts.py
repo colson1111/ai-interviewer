@@ -65,6 +65,33 @@ class TestPromptConstants:
         """Test that case study guidance mentions scenarios."""
         assert "scenario" in INTERVIEW_TYPE_GUIDANCE["case_study"].lower()
 
+    def test_case_study_guidance_emphasizes_brevity(self):
+        """Test that case study guidance emphasizes keeping setup brief."""
+        guidance = INTERVIEW_TYPE_GUIDANCE["case_study"].lower()
+        assert "brief" in guidance
+        assert "short" in guidance or "2-3 sentences" in guidance
+
+    def test_case_study_no_resume_questions(self):
+        """Test that case study guidance says not to ask about resume."""
+        guidance = INTERVIEW_TYPE_GUIDANCE["case_study"].lower()
+        assert "do not ask about" in guidance or "don't ask about" in guidance
+
+    def test_behavioral_focuses_on_past(self):
+        """Test that behavioral guidance focuses on past experiences."""
+        guidance = INTERVIEW_TYPE_GUIDANCE["behavioral"].lower()
+        assert "past" in guidance
+        assert "tell me about a time" in guidance
+
+    def test_base_prompt_no_markdown_rule(self):
+        """Test that base prompt explicitly forbids markdown."""
+        assert "never use markdown" in BASE_PROMPT.lower()
+        assert "bullet" in BASE_PROMPT.lower() or "asterisks" in BASE_PROMPT.lower()
+
+    def test_base_prompt_spoken_language_rule(self):
+        """Test that base prompt mentions text-to-speech / spoken language."""
+        lower = BASE_PROMPT.lower()
+        assert "spoken" in lower or "text-to-speech" in lower
+
     def test_evaluation_prompt_exists(self):
         """Test that evaluation prompt is defined."""
         assert EVALUATION_PROMPT is not None
