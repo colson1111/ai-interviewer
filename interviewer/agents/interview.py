@@ -24,8 +24,8 @@ class InterviewDeps:
     difficulty: str
     company_name: Optional[str]
     role_title: Optional[str]
-    resume_summary: Optional[str]  # Summary/key points from resume
-    jd_summary: Optional[str]  # Summary/key points from JD
+    resume_summary: Optional[str]  # Summary/key points from resume (first 1500 chars)
+    jd_summary: Optional[str]  # Full job description when provided; used as primary evaluation lens
     custom_instructions: Optional[str]  # Custom instructions from user
     conversation_history: List[Dict[str, Any]]
     current_phase: str
@@ -110,9 +110,11 @@ class InterviewAgent(BaseInterviewAgent):
         return build_system_prompt(interview_type, tone, difficulty)
 
     def _build_initial_context(self, deps: InterviewDeps) -> str:
-        """Build the initial context message based on interview type."""
+        """Build the initial context message based on interview type and available docs (JD / resume / neither)."""
         company = deps.company_name or "the company"
         role = deps.role_title or "this role"
+        has_jd = bool(deps.jd_summary)
+        has_resume = bool(deps.resume_summary)
 
         # Common context header
         context_parts = [
@@ -125,7 +127,6 @@ class InterviewAgent(BaseInterviewAgent):
         ]
 
         if deps.interview_type == "behavioral":
-            # BEHAVIORAL: Focus on resume and past experiences
             context_parts.append("\n=== BEHAVIORAL INTERVIEW INSTRUCTIONS ===")
             context_parts.append(
                 "This is a BEHAVIORAL interview. Focus ONLY on the candidate's "
@@ -133,36 +134,63 @@ class InterviewAgent(BaseInterviewAgent):
             )
             context_parts.append("- Ask 'Tell me about a time when...' questions")
             context_parts.append(
-                "- Reference their resume to ask about specific projects"
-            )
-            context_parts.append(
-                "- Probe how their experience aligns with the job requirements"
-            )
-            context_parts.append(
                 "- DO NOT present hypothetical scenarios or case studies"
             )
 
-            if deps.resume_summary:
+            if has_jd:
+                # JD present: treat JD as primary; probe JD focus areas even when resume is thin
+                context_parts.append(
+                    "\n=== JOB-DESCRIPTION PRIORITY ==="
+                )
+                context_parts.append(
+                    "The job description below is the PRIMARY source for what you are evaluating."
+                )
+                context_parts.append(
+                    "Identify key skills, focus areas, and requirements from the JD. "
+                    "Proactively ask about the candidate's experience and depth in those areas, "
+                    "especially where the resume is thin or silent (e.g. if the JD emphasizes "
+                    "A/B testing and product work, probe that even if the resume is ML-heavy)."
+                )
+                context_parts.append(
+                    f"\n=== JOB DESCRIPTION (full) ===\n{deps.jd_summary}"
+                )
+                if has_resume:
+                    context_parts.append(
+                        f"\n=== CANDIDATE RESUME (secondary context) ===\n{deps.resume_summary}"
+                    )
+                context_parts.append("\n=== YOUR TASK ===")
+                context_parts.append(
+                    f"Begin the behavioral interview for {role} at {company}. "
+                    "Start with a warm introduction. Ask about their background, then "
+                    "probe their experience in the key areas from the job description; "
+                    "seek out their actual familiarity with what the role requires."
+                )
+            elif has_resume:
+                # Resume only: resume-driven questions
+                context_parts.append(
+                    "- Reference their resume to ask about specific projects"
+                )
+                context_parts.append(
+                    "- Probe how their experience aligns with this role"
+                )
                 context_parts.append(
                     f"\n=== CANDIDATE RESUME (use this to ask specific questions) ===\n"
                     f"{deps.resume_summary}"
                 )
-
-            if deps.jd_summary:
+                context_parts.append("\n=== YOUR TASK ===")
                 context_parts.append(
-                    f"\n=== JOB REQUIREMENTS (align questions to these) ===\n"
-                    f"{deps.jd_summary}"
+                    f"Begin the behavioral interview for {role} at {company}. "
+                    "Start with a warm introduction and ask about their background or "
+                    "a specific experience from their resume that's relevant to this role."
+                )
+            else:
+                # Neither: default
+                context_parts.append("\n=== YOUR TASK ===")
+                context_parts.append(
+                    "Begin the interview with an appropriate opening question."
                 )
 
-            context_parts.append("\n=== YOUR TASK ===")
-            context_parts.append(
-                f"Begin the behavioral interview for {role} at {company}. "
-                "Start with a warm introduction and ask about their background or "
-                "a specific experience from their resume that's relevant to this role."
-            )
-
         elif deps.interview_type == "case_study":
-            # CASE STUDY: Brief hypothetical scenario
             context_parts.append("\n=== CASE STUDY INTERVIEW INSTRUCTIONS ===")
             context_parts.append(
                 "This is a CASE STUDY interview. Present a brief hypothetical problem."
@@ -179,13 +207,11 @@ class InterviewAgent(BaseInterviewAgent):
             context_parts.append("DO NOT ask about their past projects or resume.")
             context_parts.append("NEVER use markdown, bullets, or formatting.")
 
-            if deps.jd_summary:
+            if has_jd:
                 context_parts.append(
-                    f"\n=== JOB CONTEXT (for scenario design, don't recite this) ===\n"
+                    f"\n=== JOB DESCRIPTION (full, for scenario design; don't recite) ===\n"
                     f"{deps.jd_summary}"
                 )
-
-            # Generate case study scenario hints based on JD keywords
             scenario_hint = self._generate_case_study_hint(
                 deps.jd_summary, company, role
             )
@@ -202,7 +228,6 @@ class InterviewAgent(BaseInterviewAgent):
             )
 
         else:
-            # Fallback to behavioral
             context_parts.append("\n=== YOUR TASK ===")
             context_parts.append(
                 "Begin the interview with an appropriate opening question."
@@ -319,10 +344,8 @@ class InterviewAgent(BaseInterviewAgent):
             role_title=context.candidate_info.role_title,
             resume_summary=context.candidate_info.resume_text[:1500]
             if context.candidate_info.resume_text
-            else None,  # First 1500 chars
-            jd_summary=context.candidate_info.job_description[:1500]
-            if context.candidate_info.job_description
-            else None,  # First 1500 chars
+            else None,  # First 1500 chars for token economy
+            jd_summary=context.candidate_info.job_description.strip() or None,  # Full JD when present
             custom_instructions=context.candidate_info.custom_instructions,
             conversation_history=self.conversation_history,
             current_phase=self.current_phase,
