@@ -9,7 +9,6 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.openai import OpenAIModel
 
 from ..config import LLMConfig
 from ..core import AgentCapability, AgentMessage, AgentResponse, InterviewContext
@@ -52,9 +51,7 @@ class EvaluationAgent(BaseInterviewAgent):
         self.llm_config = llm_config
 
         # Initialize model
-        if llm_config.provider.value == "openai":
-            model = OpenAIModel(llm_config.model)
-        elif llm_config.provider.value == "anthropic":
+        if llm_config.provider.value == "anthropic":
             model = AnthropicModel(llm_config.model)
         else:
             raise ValueError(f"Unsupported provider: {llm_config.provider}")
@@ -78,7 +75,7 @@ EVALUATION CRITERIA:
 2. **Analysis**:
    - Identify concrete strengths (what they did well).
    - Identify specific improvements (what was missing or weak).
-   - Assess communication clarity, conciseness, and structure (STAR method).
+   - Assess communication: did they convey their point clearly, use concrete examples, and keep their reasoning easy to follow? This is a real-time spoken interview — do NOT penalize for imperfect structure or natural rambling. Reward substance, specificity, and coherent thinking over polished delivery.
    - Assess cultural fit (attitude, enthusiasm, professionalism).
 
 3. **Output Format** (JSON):
@@ -116,9 +113,29 @@ Provide a fair, constructive, and detailed report using professional language.
         full_transcript = "\n\n".join(transcript)
 
         interview_type = context.interview_config.interview_type.value
-        role = getattr(context.candidate_info, "role_title", "Candidate")
+        role = getattr(context.candidate_info, "role_title", None) or "Candidate"
 
-        prompt = f"""
+        # Build evaluation prompt; for custom interviews, include the plan/criteria
+        if interview_type == "custom":
+            plan = getattr(context.candidate_info, "custom_interview_plan", None) or getattr(
+                context.candidate_info, "custom_instructions", ""
+            )
+            plan_section = ""
+            if plan and plan.strip():
+                plan_section = f"""
+
+ASSESSMENT CRITERIA (from the custom interview plan - evaluate against these):
+{plan.strip()}
+"""
+            prompt = f"""
+Analyze this custom interview for the role of {role}. Score and assess against the assessment criteria provided below.
+{plan_section}
+
+TRANSCRIPT:
+{full_transcript}
+"""
+        else:
+            prompt = f"""
 Analyze this {interview_type} interview for the role of {role}.
 
 TRANSCRIPT:

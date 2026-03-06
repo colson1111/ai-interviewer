@@ -20,7 +20,7 @@
                     <label for="llm_provider">LLM Provider:</label>
                     <select name="llm_provider" id="llm_provider" required>
                         {% for provider in llm_providers %}
-                        <option value="{{ provider }}" {% if provider == 'openai' %}selected{% endif %}>
+                        <option value="{{ provider }}" selected>
                             {{ provider.title() }}
                         </option>
                         {% endfor %}
@@ -30,19 +30,20 @@
                 <div class="form-group">
                     <label for="llm_model">Model:</label>
                     <select name="llm_model" id="llm_model" required>
-                        <option value="gpt-4o">GPT-4o</option>
-                        <option value="gpt-4o-mini">GPT-4o Mini</option>
-                        <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                        <option value="gpt-4">GPT-4</option>
-                        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                        <option value="claude-sonnet-4-20250514" selected>Claude Sonnet 4</option>
+                        <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                        <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                        <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+                        <option value="claude-3-opus-20240229">Claude 3 Opus</option>
+                        <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
                     </select>
                 </div>
 
                 <div class="form-group">
                     <label for="api_key">API Key (Optional):</label>
-                    <input type="password" name="api_key" id="api_key" 
+                    <input type="password" name="api_key" id="api_key"
                            placeholder="Leave blank to use .env_local file">
-                    <small class="form-help">💡 Will use OPENAI_API_KEY or ANTHROPIC_API_KEY from .env_local if empty. Not stored permanently.</small>
+                    <small class="form-help">💡 Will use ANTHROPIC_API_KEY from .env_local if empty. Not stored permanently.</small>
                 </div>
             </section>
 
@@ -55,6 +56,7 @@
                     <select name="interview_type" id="interview_type" required>
                         <option value="behavioral">Behavioral</option>
                         <option value="case_study">Case Study</option>
+                        <option value="custom">Custom</option>
                     </select>
                 </div>
 
@@ -88,20 +90,35 @@
                 <div class="form-group">
                     <label for="tts_voice">Interviewer Voice:</label>
                     <select name="tts_voice" id="tts_voice" required>
-                        <option value="alloy" selected>Alloy (Neutral, Clear)</option>
-                        <option value="echo">Echo (Male, Confident)</option>
-                        <option value="fable">Fable (British Accent)</option>
-                        <option value="onyx">Onyx (Deep, Authoritative)</option>
-                        <option value="nova">Nova (Young, Energetic)</option>
-                        <option value="shimmer">Shimmer (Warm, Friendly)</option>
+                        <optgroup label="Men">
+                        <option value="yYcS13q9YIRwVXmvXnBq" selected>Craig</option>
+                        <option value="6OzrBCQf8cjERkYgzSg8">Young Jamal</option>
+                        <option value="C9fbwSpEaejywLWx722Z">Marcus - Classic Audiobook Narrator</option>
+                        <option value="qhJBF445N8YMaTNrlvGE">Zach - Energetic, Honest</option>
+                        <option value="kSvMZug5ZFM9sKGpLAei">James - Smooth, Steady, Southern</option>
+                        <option value="mCQMfsqGDT6IDkEKR20a">Jeevan - Expressive, Confident</option>
+                        <option value="hAkyLAnTJ7hr8We6PY6X">Patrick - Inspirational Speaker</option>
+                        <option value="nPczCjzI2devNBz1zQrb">Brian - Deep, Resonant</option>
+                        <option value="JBFqnCBsd6RMkjVDRZzb">George - Warm, Storyteller</option>
+                        <option value="cjVigY5qzO86Huf0OWal">Eric - Smooth, Trustworthy</option>
+                        <option value="bIHbv24MWmeRgasZH58o">Will - Relaxed Optimist</option>
+                        </optgroup>
+                        <optgroup label="Women">
+                        <option value="Xb7hH8MSUJpSbSDYk0k2">Alice - Clear, Engaging</option>
+                        <option value="cgSgspJ2msm6clMCkdW9">Jessica - Playful, Bright</option>
+                        <option value="pFZP5JQG7iQjIQuC4Bku">Lily - Velvety, Expressive</option>
+                        <option value="SAz9YHcvj6GT2YYXdXww">River - Relaxed, Neutral</option>
+                        <option value="EXAVITQu4vr4xnSDxMaL">Sarah - Mature, Reassuring</option>
+                        <option value="XrExE9yKIg1WjnnlVkGX">Matilda - Knowledgeable, Professional</option>
+                        </optgroup>
                     </select>
-                    <small class="form-help">Choose the interviewer's voice personality (uses OpenAI TTS)</small>
+                    <small class="form-help">Choose the interviewer's voice personality (uses ElevenLabs TTS)</small>
                 </div>
 
                 <div class="form-group">
                     <label>
                         <input type="checkbox" name="tts_enabled" id="tts_enabled">
-                        Enable interviewer voice ($0.015 per 1K characters)
+                        Enable interviewer voice (~$0.11 per 1K characters)
                     </label>
                     <small class="form-help">Uncheck to save costs - you can toggle during interview</small>
                 </div>
@@ -125,15 +142,16 @@
             </section>
 
             <!-- Custom Instructions Section -->
-            <section class="form-section">
-                <h3>📝 Custom Instructions (Optional)</h3>
+            <section class="form-section" id="custom_instructions_section">
+                <h3>📝 Custom Instructions <span id="custom_required_label" class="hidden">(Required for Custom)</span><span id="custom_optional_label">(Optional)</span></h3>
 
                 <div class="form-group">
                     <label for="custom_instructions">Additional Instructions for Interviewer:</label>
                     <textarea name="custom_instructions" id="custom_instructions" 
                               rows="4" 
                               placeholder="e.g., Focus on time series forecasting, emphasize healthcare domain experience, include system design questions, ask about team leadership..."></textarea>
-                    <small class="form-help">Provide specific guidance to customize your interview focus and style.</small>
+                    <small class="form-help" id="custom_instructions_help">Provide specific guidance to customize your interview focus and style.</small>
+                    <small class="form-help hidden" id="custom_instructions_help_custom">Paste the interviewer overview or custom instructions. These will be expanded into a fuller interview plan using your resume and job description. <strong>Required for Custom interviews.</strong></small>
                 </div>
             </section>
 
@@ -167,47 +185,20 @@
 
 {% block extra_scripts %}
 <script>
-// Dynamic model selection based on provider
-document.getElementById('llm_provider').addEventListener('change', function() {
-    const provider = this.value;
-    const modelSelect = document.getElementById('llm_model');
-    
-    // Clear existing options
-    modelSelect.innerHTML = '';
-    
-    if (provider === 'openai') {
-        const models = [
-            {value: 'gpt-4o', text: 'GPT-4o'},
-            {value: 'gpt-4o-mini', text: 'GPT-4o Mini'},
-            {value: 'gpt-4-turbo', text: 'GPT-4 Turbo'},
-            {value: 'gpt-4', text: 'GPT-4'},
-            {value: 'gpt-3.5-turbo', text: 'GPT-3.5 Turbo'}
-        ];
-        models.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.value;
-            option.textContent = model.text;
-            modelSelect.appendChild(option);
-        });
-    } else if (provider === 'anthropic') {
-        const models = [
-            {value: 'claude-sonnet-4-20250514', text: 'Claude Sonnet 4'},
-            {value: 'claude-opus-4-20250514', text: 'Claude Opus 4'},
-            {value: 'claude-3-5-sonnet-20241022', text: 'Claude 3.5 Sonnet'},
-            {value: 'claude-3-5-haiku-20241022', text: 'Claude 3.5 Haiku'},
-            {value: 'claude-3-opus-20240229', text: 'Claude 3 Opus'},
-            {value: 'claude-3-haiku-20240307', text: 'Claude 3 Haiku'}
-        ];
-        models.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.value;
-            option.textContent = model.text;
-            modelSelect.appendChild(option);
-        });
-    }
-});
-
-// Trigger initial model population
-document.getElementById('llm_provider').dispatchEvent(new Event('change'));
+// Show/hide custom instructions helper based on interview type
+function updateCustomInstructionsUI() {
+    const type = document.getElementById('interview_type').value;
+    const isCustom = type === 'custom';
+    document.getElementById('custom_required_label').classList.toggle('hidden', !isCustom);
+    document.getElementById('custom_optional_label').classList.toggle('hidden', isCustom);
+    document.getElementById('custom_instructions_help').classList.toggle('hidden', isCustom);
+    document.getElementById('custom_instructions_help_custom').classList.toggle('hidden', !isCustom);
+    document.getElementById('custom_instructions').rows = isCustom ? 6 : 4;
+    document.getElementById('custom_instructions').placeholder = isCustom
+        ? "e.g., The interviewer will focus on analytical thinking and structuring ambiguous problems. Expect a mix of hypothetical scenarios and follow-up questions about your approach..."
+        : "e.g., Focus on time series forecasting, emphasize healthcare domain experience, include system design questions, ask about team leadership...";
+}
+document.getElementById('interview_type').addEventListener('change', updateCustomInstructionsUI);
+updateCustomInstructionsUI();
 </script>
 {% endblock %}

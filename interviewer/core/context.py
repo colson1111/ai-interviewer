@@ -54,6 +54,7 @@ class CandidateInfo:
     resume_text: str = ""  # Full text of uploaded resume
     job_description: str = ""  # Full text of job description
     custom_instructions: str = ""  # Custom instructions for the interview
+    custom_interview_plan: Optional[str] = None  # LLM-expanded plan for custom type
     company_name: Optional[str] = None  # Optional company name
     role_title: Optional[str] = None  # Optional specific role title
 

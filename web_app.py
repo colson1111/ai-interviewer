@@ -30,8 +30,6 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from openai import OpenAI
-
 # Load environment variables from .env_local
 # override=True ensures .env_local values take precedence over shell environment
 load_dotenv(".env_local", override=True)
@@ -42,11 +40,13 @@ from interviewer.config import (
     InterviewType,
     LLMConfig,
     LLMProvider,
+    MAX_RECORDING_MINUTES,
     Tone,
 )
 from interviewer.core import CandidateInfo, InterviewContext
 from interviewer.cost_tracker import CostTracker, estimate_tokens_detailed
 from interviewer.document_parser import create_document_context
+from interviewer.interview_plan_expander import expand_custom_interview_plan
 from interviewer.multi_agent_system import create_multi_agent_interview_system
 
 
@@ -128,7 +128,7 @@ async def setup_interview(
     interview_type: str = Form(...),
     tone: str = Form(...),
     difficulty: str = Form(...),
-    tts_voice: str = Form("alloy"),  # Voice selection
+    tts_voice: str = Form("yYcS13q9YIRwVXmvXnBq"),  # ElevenLabs voice_id (default: Craig)
     tts_enabled: Optional[str] = Form(None),  # Checkbox (None if unchecked)
     company_name: Optional[str] = Form(None),
     role_title: Optional[str] = Form(None),
@@ -168,6 +168,9 @@ async def setup_interview(
         # Generate unique session ID
         session_id = f"session_{int(datetime.now().timestamp())}"
 
+        # Initialize cost tracker early (used for expansion when custom type)
+        cost_tracker = CostTracker(session_id)
+
         # Process API key (use environment variable if not provided)
         if not api_key:
             api_key_env_var = f"{llm_provider.upper()}_API_KEY"
@@ -184,9 +187,8 @@ async def setup_interview(
         )
 
         # CRITICAL: Set the environment variable BEFORE creating the agent system
-        # pydantic-ai's OpenAIModel/AnthropicModel read from environment variables
-        env_var_name = f"{llm_config.provider.value.upper()}_API_KEY"
-        os.environ[env_var_name] = api_key
+        # pydantic-ai's AnthropicModel reads ANTHROPIC_API_KEY from the environment
+        os.environ["ANTHROPIC_API_KEY"] = api_key
 
         # Create interview configuration
         interview_config = InterviewConfig(
@@ -194,6 +196,15 @@ async def setup_interview(
             tone=Tone(tone),
             difficulty=Difficulty(difficulty),
         )
+
+        # Validate custom instructions when interview type is custom
+        if interview_type == "custom":
+            instructions = (custom_instructions or "").strip()
+            if not instructions:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Custom instructions are required for Custom interviews.",
+                )
 
         # Process uploaded documents
         resume_text = ""
@@ -209,10 +220,23 @@ async def setup_interview(
         candidate_info = CandidateInfo(
             resume_text=resume_text,
             job_description=job_description_text,
-            custom_instructions=custom_instructions,
+            custom_instructions=custom_instructions or "",
             company_name=company_name,
             role_title=role_title,
         )
+
+        # Expand custom instructions into fuller plan when interview type is custom
+        if interview_type == "custom" and (custom_instructions or "").strip():
+            expanded_plan = await expand_custom_interview_plan(
+                custom_instructions=(custom_instructions or "").strip(),
+                resume_text=resume_text,
+                job_description=job_description_text,
+                company_name=company_name,
+                role_title=role_title,
+                llm_config=llm_config,
+                cost_tracker=cost_tracker,
+            )
+            candidate_info.custom_interview_plan = expanded_plan
 
         # Create document context for the interview
         document_context = create_document_context(resume_text, job_description_text)
@@ -221,9 +245,6 @@ async def setup_interview(
         interview_system = create_multi_agent_interview_system(
             llm_config=llm_config, interview_config=interview_config
         )
-
-        # Initialize cost tracker
-        cost_tracker = CostTracker(session_id)
 
         # Store session data
         active_sessions[session_id] = {
@@ -310,98 +331,53 @@ async def _process_uploaded_file(file: UploadFile) -> str:
         return ""
 
 
-@app.get("/api/whisper-available")
-async def whisper_available():
-    """
-    Check if OpenAI Whisper API is available.
-
-    This endpoint:
-    - Verifies OpenAI API key is configured
-    - Returns availability status for frontend
-
-    Returns:
-        JSON response with availability status
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
+@app.get("/api/elevenlabs-available")
+async def elevenlabs_available():
+    """Check if ElevenLabs API is available (used for both STT and TTS)."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
     return {"available": bool(api_key)}
 
 
-@app.post("/api/whisper-transcribe")
-async def whisper_transcribe(
+@app.post("/api/elevenlabs-transcribe")
+async def elevenlabs_transcribe(
     audio_file: UploadFile = File(...), session_id: str = Form(None)
 ):
-    """
-    Transcribe audio using OpenAI Whisper API.
-
-    This endpoint:
-    1. Receives audio file from frontend
-    2. Sends to OpenAI Whisper API for transcription
-    3. Returns transcribed text
-    4. Tracks cost for transcription
-
-    Args:
-        audio_file: Audio file to transcribe
-        session_id: Optional session ID for cost tracking
-
-    Returns:
-        JSON response with transcribed text
-    """
+    """Transcribe audio using ElevenLabs Scribe."""
     try:
-        # Read audio file
         audio_content = await audio_file.read()
 
-        # Get OpenAI API key
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv("ELEVENLABS_API_KEY")
         if not api_key:
-            raise HTTPException(status_code=400, detail="OpenAI API key not configured")
+            raise HTTPException(status_code=400, detail="ElevenLabs API key not configured")
 
-        # Initialize OpenAI client
+        from elevenlabs.client import ElevenLabs
 
-        client = OpenAI(api_key=api_key)
-
-        # Transcribe audio using Whisper
-        response = client.audio.transcriptions.create(
-            model="whisper-1", file=("audio.webm", audio_content, "audio/webm")
+        client = ElevenLabs(api_key=api_key)
+        result = client.speech_to_text.convert(
+            file=("recording.webm", audio_content, "audio/webm"),
+            model_id="scribe_v1",
+            language_code="en",
+            tag_audio_events=False,
         )
+        transcript = result.text
 
-        transcribed_text = response.text
-
-        # Track cost if session exists
         if session_id and session_id in active_sessions:
-            session = active_sessions[session_id]
-            cost_tracker = session["cost_tracker"]
+            duration_seconds = len(audio_content) / 16000  # rough estimate
+            active_sessions[session_id]["cost_tracker"].add_elevenlabs_stt_call(
+                audio_seconds=duration_seconds
+            )
 
-            # Estimate cost for Whisper transcription
-            # Whisper pricing: $0.006 per minute
-            duration_seconds = len(audio_content) / 16000  # Rough estimate
-            cost_tracker.add_whisper_call(audio_seconds=duration_seconds)
-
-        return {"success": True, "transcript": transcribed_text}
+        return {"success": True, "transcript": transcript}
 
     except Exception as e:
-        print(f"Error in whisper_transcribe: {e}")
+        print(f"Error in elevenlabs_transcribe: {e}")
         raise HTTPException(status_code=500, detail="Transcription failed")
 
 
 @app.post("/api/tts-synthesize")
 async def tts_synthesize(request: Request):
-    """
-    Synthesize speech using OpenAI TTS API.
-
-    This endpoint:
-    1. Receives text to synthesize
-    2. Sends to OpenAI TTS API
-    3. Returns audio data
-    4. Tracks cost for synthesis
-
-    Args:
-        request: FastAPI request with JSON body containing text and session_id
-
-    Returns:
-        Audio response with synthesized speech
-    """
+    """Synthesize speech using ElevenLabs TTS."""
     try:
-        # Parse request body
         body = await request.json()
         text = body.get("text", "")
         session_id = body.get("session_id")
@@ -409,38 +385,34 @@ async def tts_synthesize(request: Request):
         if not text:
             raise HTTPException(status_code=400, detail="No text provided")
 
-        # Get session data
         if not session_id or session_id not in active_sessions:
             raise HTTPException(status_code=400, detail="Invalid session ID")
 
         session = active_sessions[session_id]
-        tts_voice = session.get("tts_voice", "alloy")
+        # tts_voice stores an ElevenLabs voice_id
+        tts_voice = session.get("tts_voice", "yYcS13q9YIRwVXmvXnBq")  # Craig
         tts_enabled = session.get("tts_enabled", False)
 
         if not tts_enabled:
             return JSONResponse({"disabled": True}, status_code=200)
 
-        # Get OpenAI API key
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv("ELEVENLABS_API_KEY")
         if not api_key:
-            raise HTTPException(status_code=400, detail="OpenAI API key not configured")
+            raise HTTPException(status_code=400, detail="ElevenLabs API key not configured")
 
-        # Initialize OpenAI client
-        client = OpenAI(api_key=api_key)
+        from elevenlabs.client import ElevenLabs
 
-        # Synthesize speech
-        response = client.audio.speech.create(
-            model="tts-1", voice=tts_voice, input=text
+        client = ElevenLabs(api_key=api_key)
+        audio_generator = client.text_to_speech.convert(
+            voice_id=tts_voice,
+            text=text,
+            model_id="eleven_turbo_v2_5",
+            output_format="mp3_44100_128",
         )
+        audio_data = b"".join(audio_generator)
 
-        # Get audio data
-        audio_data = response.content
+        session["cost_tracker"].add_elevenlabs_call(characters=len(text))
 
-        # Track cost
-        cost_tracker = session["cost_tracker"]
-        cost_tracker.add_tts_call(characters=len(text), model="tts-1")
-
-        # Return audio response
         return Response(
             content=audio_data,
             media_type="audio/mpeg",
@@ -553,9 +525,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     try:
         # Set API key for the session
-        os.environ[f"{session['llm_config'].provider.value.upper()}_API_KEY"] = session[
-            "llm_config"
-        ].api_key
+        os.environ["ANTHROPIC_API_KEY"] = session["llm_config"].api_key
 
         # Get interview system and context
         interview_system = session["interview_system"]
@@ -597,10 +567,47 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         session["initial_message_pending"] = False
 
                 elif message_data["type"] == "user_message":
-                    # Process user message through multi-agent system - always fresh generation
+                    # Soft trigger: when 20 min reached, signal AI to wrap up (no hard stop)
+                    # Use frontend recording time (mic-on time); fallback to Whisper minutes if no frontend data
+                    frontend_seconds = message_data.get("recording_seconds", 0) or 0
+                    session["recording_seconds"] = max(
+                        session.get("recording_seconds", 0), frontend_seconds
+                    )
+                    whisper_minutes = cost_tracker.get_token_stats().get(
+                        "audio_minutes", 0
+                    )
+                    # Prefer frontend (tracks all mic time); Whisper covers refine-only usage
+                    audio_minutes = max(
+                        session["recording_seconds"] / 60,
+                        whisper_minutes,
+                    )
+                    first_trigger = False
+                    if audio_minutes >= MAX_RECORDING_MINUTES:
+                        if not session.get("wrap_up_triggered"):
+                            session["wrap_up_triggered"] = True
+                            first_trigger = True
+
+                    # Pass wrap-up hint to agents so they transition naturally
+                    context.session_metadata["wrap_up_triggered"] = session.get(
+                        "wrap_up_triggered", False
+                    )
+
+                    # Process user message through multi-agent system
                     combined_response = await interview_system.process_message(
                         message_data["content"], context
                     )
+
+                    # On first wrap-up trigger, notify frontend (informational only)
+                    if first_trigger:
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "wrap_up_triggered",
+                                    "content": {"audio_minutes": audio_minutes},
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        )
 
                     # Process the response
                     try:
@@ -804,4 +811,4 @@ async def startup_event():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=3000, reload=True)
+    uvicorn.run("web_app:app", host="0.0.0.0", port=3000, reload=True)

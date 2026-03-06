@@ -185,6 +185,17 @@ body {
     background: #f59e0b;
 }
 
+.btn-conversation-mode {
+    font-size: 1.1rem;
+    min-width: 2.2rem;
+}
+
+.btn-conversation-mode.active {
+    background: #16a34a;
+    border-color: #22c55e;
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.4);
+}
+
 .btn-danger {
     background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
     border: none;
@@ -619,6 +630,43 @@ body {
     border-left: 3px solid #3498db;
 }
 
+/* Compact voice controls - single row */
+.voice-controls-compact {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.6rem;
+}
+
+.voice-controls-compact label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.voice-controls-compact input[type="checkbox"] {
+    transform: scale(1);
+}
+
+.voice-controls-compact input[type="range"] {
+    width: 60px;
+}
+
+.voice-controls-compact #speed-value {
+    font-size: 0.8rem;
+    min-width: 32px;
+}
+
+.focus-mode-label {
+    margin-left: auto;
+}
+
 .voice-toggle {
     margin-bottom: 0.5rem;
 }
@@ -686,6 +734,11 @@ body {
     font-weight: 500;
     color: #3498db;
     min-width: 40px;
+}
+
+/* Focus mode: hide chat while speaking */
+.chat-focusable.focus-mode-hidden {
+    display: none !important;
 }
 
 /* Cost Widget */
@@ -994,6 +1047,22 @@ body {
     
     .setup-container {
         padding: 1rem;
+    }
+}
+
+/* Smaller font on small screens to show more conversation */
+@media (max-width: 768px), (max-height: 700px) {
+    .chat-messages {
+        font-size: 0.9rem;
+    }
+    
+    .message {
+        padding: 0.75rem;
+        font-size: 0.9rem;
+    }
+    
+    .message-timestamp {
+        font-size: 0.75rem;
     }
 }
 

@@ -29,7 +29,7 @@
     
     <!-- Main Chat Area -->
     <div class="chat-section">
-        <div class="chat-header">
+        <div class="chat-header chat-focusable" id="chat-header">
             <h3>💬 Interview Conversation</h3>
             <div class="status-indicator">
                 <span id="connection-status" class="status-connected">Connected</span>
@@ -37,7 +37,7 @@
             </div>
         </div>
 
-        <div id="chat-messages" class="chat-messages">
+        <div id="chat-messages" class="chat-messages chat-focusable">
             <!-- Messages will be dynamically added here -->
         </div>
 
@@ -48,8 +48,14 @@
                 <button id="mic-button" class="btn btn-secondary" disabled title="Voice input">
                     <span class="mic-icon">🎤</span>
                 </button>
-                <button id="whisper-button" class="btn btn-whisper" disabled title="Refine with Whisper (High Accuracy)">
+                <button id="whisper-button" class="btn btn-whisper" disabled title="Refine with ElevenLabs Scribe (High Accuracy)">
                     <span class="whisper-icon">🎯</span>
+                </button>
+                <button id="conversation-mode-btn" class="btn btn-secondary btn-conversation-mode"
+                        onclick="window.interviewChat && window.interviewChat.toggleConversationMode()"
+                        title="Enable conversation mode (hands-free)"
+                        style="display: none;">
+                    <span>&#8734;</span>
                 </button>
                 <button id="send-button" class="btn btn-primary" disabled>
                     <span>Send</span>
@@ -63,29 +69,17 @@
                 <small>💡 Tip: Take your time to think through your responses. Use the microphone button for voice input.</small>
             </div>
             <div id="whisper-info" class="whisper-info hidden">
-                <small>ℹ️ <strong>Enhanced Accuracy:</strong> Add OpenAI API key in setup for Whisper transcription</small>
+                <small>ℹ️ <strong>Enhanced Accuracy:</strong> Add an ElevenLabs API key to .env_local for high-accuracy transcription</small>
             </div>
             
-            <!-- Voice Controls -->
-            <div class="voice-controls">
-                <div class="voice-toggle">
-                    <label>
-                        <input type="checkbox" id="voice-enabled" checked>
-                        <span class="voice-icon">🔊</span> Interviewer Voice (Browser)
-                    </label>
-                </div>
-                <div class="tts-toggle">
-                    <label>
-                        <input type="checkbox" id="tts-enabled">
-                        <span class="tts-icon">🎙️</span> AI Voice (OpenAI TTS)
-                    </label>
-                    <small class="cost-note">💰 Costs: $0.015/1K chars</small>
-                </div>
-                <div class="voice-settings">
-                    <label for="voice-speed">Speed:</label>
-                    <input type="range" id="voice-speed" min="0.5" max="2" step="0.1" value="1">
-                    <span id="speed-value">1.0x</span>
-                </div>
+            <!-- Voice Controls (compact) -->
+            <div class="voice-controls voice-controls-compact">
+                <label><input type="checkbox" id="voice-enabled" checked><span class="voice-icon">🔊</span> Browser</label>
+                <label><input type="checkbox" id="tts-enabled"><span class="tts-icon">🎙️</span> TTS</label>
+                <label for="voice-speed">Speed:</label>
+                <input type="range" id="voice-speed" min="0.5" max="2" step="0.1" value="1.3">
+                <span id="speed-value">1.3x</span>
+                <label class="focus-mode-label"><input type="checkbox" id="focus-mode"><span>👁️ Focus</span></label>
             </div>
         </div>
     </div>
@@ -155,5 +149,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/interview.js?v=7"></script>
+<script src="/static/js/interview.js?v=9"></script>
 {% endblock %}

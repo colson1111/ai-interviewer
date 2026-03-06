@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.openai import OpenAIModel
 
 from ..config import InterviewConfig, LLMConfig
 from ..core import AgentCapability, AgentMessage, AgentResponse, InterviewContext
@@ -29,6 +28,8 @@ class InterviewDeps:
     custom_instructions: Optional[str]  # Custom instructions from user
     conversation_history: List[Dict[str, Any]]
     current_phase: str
+    custom_interview_plan: Optional[str] = None  # LLM-expanded plan for custom type
+    wrap_up_triggered: bool = False  # Recording time limit reached; start wrapping up
 
 
 def interview_system_prompt(ctx: RunContext[InterviewDeps]) -> str:
@@ -59,14 +60,20 @@ YOUR ROLE:
 - If this is a case study, guide them through the problem structuredly.
 
 GUIDELINES:
-- Keep your responses concise (usually 1-3 sentences/questions).
+- Ask ONE question per turn. At most two if they are tightly related. Never more.
+- Keep your responses concise (usually 1-3 sentences total).
 - Do NOT repeat yourself.
 - Do NOT be overly encouraging or repetitive with praise.
 - Move the interview forward with each turn.
 - If the user asks for clarification, provide it clearly.
 - If the user is stuck, offer a small hint but don't give the answer.
+- When the candidate checks in mid-response ("Does that make sense?", "Am I on track?") or asks a quick question: answer briefly and invite them to continue. Do NOT ask a follow-up question—let them finish their thought.
 
 CURRENT PHASE: {deps.current_phase}
+"""
+    if deps.wrap_up_triggered:
+        prompt += """
+WRAP-UP PHASE: We've reached the recording time limit. Give a brief final response to what the candidate just said, then transition to asking "Do you have any questions for me?" Keep the conversation open—answer their questions naturally. They will end the interview when ready. Do not force-close; let them wrap up on their own terms.
 """
     return prompt
 
@@ -132,7 +139,9 @@ class InterviewAgent(BaseInterviewAgent):
                 "This is a BEHAVIORAL interview. Focus ONLY on the candidate's "
                 "PAST experiences and work history."
             )
-            context_parts.append("- Ask 'Tell me about a time when...' questions")
+            context_parts.append(
+                "- Probe past experiences using varied phrasings; don't rely on a single question template."
+            )
             context_parts.append(
                 "- DO NOT present hypothetical scenarios or case studies"
             )
@@ -222,10 +231,40 @@ class InterviewAgent(BaseInterviewAgent):
             context_parts.append("\n=== YOUR TASK ===")
             context_parts.append(
                 f"Start with a brief, conversational setup for {role} at {company}. "
-                "Example: 'Let's work through a scenario. Say you're at {company} "
-                "and customer churn has been rising. Leadership wants you to look "
-                "into it. Where would you start?' Then WAIT for their response."
+                "Vary your opening style—brief scenario, question, or constraint—and "
+                "WAIT for their response. Don't prescribe one format."
             )
+
+        elif deps.interview_type == "custom":
+            context_parts.append("\n=== CUSTOM INTERVIEW ===")
+            context_parts.append(
+                "This interview is structured by the INTERVIEW PLAN below. "
+                "Follow it closely. Do NOT default to behavioral or case study patterns "
+                "unless the plan explicitly asks for them."
+            )
+            plan = (deps.custom_interview_plan or "").strip()
+            if plan:
+                context_parts.append(
+                    f"\n=== INTERVIEW PLAN (follow this) ===\n{plan}"
+                )
+            if has_jd:
+                context_parts.append(
+                    f"\n=== JOB DESCRIPTION ===\n{deps.jd_summary}"
+                )
+            if has_resume:
+                context_parts.append(
+                    f"\n=== CANDIDATE RESUME ===\n{deps.resume_summary}"
+                )
+            context_parts.append("\n=== YOUR TASK ===")
+            if plan:
+                context_parts.append(
+                    f"Begin the custom interview for {role} at {company} per the plan. "
+                    "Start with a brief welcome and first question."
+                )
+            else:
+                context_parts.append(
+                    "Begin the interview with an appropriate opening question."
+                )
 
         else:
             context_parts.append("\n=== YOUR TASK ===")
@@ -233,7 +272,8 @@ class InterviewAgent(BaseInterviewAgent):
                 "Begin the interview with an appropriate opening question."
             )
 
-        if deps.custom_instructions:
+        # Add special instructions only for non-custom types (custom uses the plan above)
+        if deps.custom_instructions and deps.interview_type != "custom":
             context_parts.append(
                 f"\n=== SPECIAL INSTRUCTIONS ===\n{deps.custom_instructions}"
             )
@@ -290,9 +330,7 @@ class InterviewAgent(BaseInterviewAgent):
         self, llm_config: LLMConfig, interview_config: InterviewConfig
     ):
         """Initialize or reinitialize the pydantic-ai agent."""
-        if llm_config.provider.value == "openai":
-            model = OpenAIModel(llm_config.model)
-        elif llm_config.provider.value == "anthropic":
+        if llm_config.provider.value == "anthropic":
             model = AnthropicModel(llm_config.model)
         else:
             raise ValueError(f"Unsupported provider: {llm_config.provider}")
@@ -349,6 +387,10 @@ class InterviewAgent(BaseInterviewAgent):
             custom_instructions=context.candidate_info.custom_instructions,
             conversation_history=self.conversation_history,
             current_phase=self.current_phase,
+            custom_interview_plan=getattr(
+                context.candidate_info, "custom_interview_plan", None
+            ),
+            wrap_up_triggered=context.session_metadata.get("wrap_up_triggered", False),
         )
 
         try:

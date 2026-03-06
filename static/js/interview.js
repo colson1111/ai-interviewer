@@ -30,14 +30,16 @@ class InterviewChat {
         this.audioChunks = [];
         this.isRecording = false;
         this.whisperButton = document.getElementById('whisper-button');
+        this.recordingStartTime = null;  // For wrap-up trigger (tracks session recording time)
+        this.totalRecordingSeconds = 0;
         
         // Voice synthesis properties
         this.voiceEnabled = true;
-        this.voiceSpeed = 1.0;
+        this.voiceSpeed = 1.3;
         this.currentSpeech = null;
         this.speechSynth = window.speechSynthesis;
         this.availableVoices = [];
-        this.openaiTtsAvailable = false;
+        this.elevenLabsTtsAvailable = false;
         this.voiceToggle = document.getElementById('voice-enabled');
         this.voiceSpeedSlider = document.getElementById('voice-speed');
         this.speedValueDisplay = document.getElementById('speed-value');
@@ -45,6 +47,15 @@ class InterviewChat {
         // TTS (OpenAI) properties
         this.ttsEnabled = true; // Default to enabled, will be set from session
         this.ttsToggle = document.getElementById('tts-enabled');
+
+        // Conversation mode
+        this.conversationModeActive = false;
+        this.silenceTimer = null;
+        this.SILENCE_TIMEOUT_MS = 2000;
+
+        // Focus mode: hide chat and suppress live transcript while speaking
+        this.focusModeToggle = document.getElementById('focus-mode');
+        this.chatFocusableElements = document.querySelectorAll('.chat-focusable');
         
         this.init();
     }
@@ -195,7 +206,8 @@ class InterviewChat {
         const message = {
             type: 'user_message',
             content: content,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            recording_seconds: Math.round(this.totalRecordingSeconds)
         };
         
         // Add to UI immediately
@@ -223,9 +235,14 @@ class InterviewChat {
                 this.addMessageToChat('interviewer', data.content, data.timestamp);
                 this.enableInput();
                 this.hideTypingIndicator();
-                
+
                 // Speak the interviewer's message
                 this.speakText(data.content);
+
+                // Conversation mode: if voice is off, no audio will play, start mic immediately
+                if (this.conversationModeActive && !this.isListening && !this.voiceEnabled) {
+                    setTimeout(() => this.startListening(), 400);
+                }
                 break;
             case 'coding_prompt':
                 this.insertProblemIntoEditor(data.content, data.question_number);
@@ -261,6 +278,15 @@ class InterviewChat {
                 this.addMessageToChat('error', data.content, data.timestamp);
                 this.enableInput();
                 InterviewApp.showNotification('Interview error: ' + data.content, 'error');
+                break;
+
+            case 'time_limit_reached':
+                // Legacy: treat as soft trigger (notification only, no hard stop)
+                InterviewApp.showNotification("20 minutes of recording reached. The interviewer will start wrapping up.", 'info');
+                break;
+
+            case 'wrap_up_triggered':
+                InterviewApp.showNotification("20 minutes of recording reached. The interviewer will start wrapping up.", 'info');
                 break;
                 
             case 'interview_ended':
@@ -337,6 +363,11 @@ class InterviewChat {
             this.micButton.disabled = false;
         }
         this.enableWhisperButton();
+        // Show conversation mode button once the interview is live
+        if (this.speechSupported) {
+            const cmBtn = document.getElementById('conversation-mode-btn');
+            if (cmBtn) cmBtn.style.display = '';
+        }
         this.messageInput.focus();
     }
     
@@ -353,8 +384,15 @@ class InterviewChat {
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
     
-    async endInterview() {
-        if (confirm('Are you sure you want to end the interview?')) {
+    async endInterview(options = {}) {
+        const skipConfirmation = options.skipConfirmation === true;
+        if (skipConfirmation || confirm('Are you sure you want to end the interview?')) {
+            // Disable conversation mode
+            this.conversationModeActive = false;
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+            const cmBtn = document.getElementById('conversation-mode-btn');
+            if (cmBtn) cmBtn.classList.remove('active');
             if (this.ws && this.isConnected) {
                 this.ws.send(JSON.stringify({
                     type: 'end_interview',
@@ -495,6 +533,9 @@ class InterviewChat {
             
             // Start audio recording for Whisper
             this.startAudioRecording();
+
+            // Focus mode: hide chat, suppress live transcript
+            this.applyFocusModeWhileListening(true);
         };
         
         this.recognition.onresult = (event) => {
@@ -515,13 +556,22 @@ class InterviewChat {
                 this.accumulatedTranscript += finalTranscript;
             }
             
-            // Display accumulated + interim transcript
+            // Display accumulated + interim transcript (skip if focus mode - show only after stop)
             const fullTranscript = this.accumulatedTranscript + interimTranscript;
-            if (fullTranscript.trim()) {
-                this.messageInput.value = fullTranscript;
-                // Auto-resize textarea
-                this.messageInput.style.height = 'auto';
-                this.messageInput.style.height = this.messageInput.scrollHeight + 'px';
+            if (!this.isFocusModeActive()) {
+                if (fullTranscript.trim()) {
+                    this.messageInput.value = fullTranscript;
+                    this.messageInput.style.height = 'auto';
+                    this.messageInput.style.height = this.messageInput.scrollHeight + 'px';
+                }
+            }
+
+            // Conversation mode: reset silence timer on every speech result
+            if (this.conversationModeActive) {
+                clearTimeout(this.silenceTimer);
+                this.silenceTimer = setTimeout(() => {
+                    this.autoSendConversationTurn();
+                }, this.SILENCE_TIMEOUT_MS);
             }
         };
         
@@ -540,7 +590,10 @@ class InterviewChat {
                 this.speechStatus.classList.add('hidden');
                 this.micButton.style.background = '';
                 this.micButton.title = 'Voice input';
-                
+
+                // Focus mode: show chat, reveal transcript
+                this.applyFocusModeWhileListening(false);
+
                 // Stop audio recording for Whisper
                 this.stopAudioRecording();
             }
@@ -552,7 +605,8 @@ class InterviewChat {
             this.speechStatus.classList.add('hidden');
             this.micButton.style.background = '';
             this.micButton.title = 'Voice input';
-            
+            this.applyFocusModeWhileListening(false);
+
             // Show user-friendly error message
             if (event.error === 'not-allowed') {
                 alert('Microphone access denied. Please allow microphone access to use voice input.');
@@ -594,7 +648,8 @@ class InterviewChat {
             this.speechStatus.classList.add('hidden');
             this.micButton.style.background = '';
             this.micButton.title = 'Voice input';
-            
+            this.applyFocusModeWhileListening(false);
+
         } else {
             console.log('Starting speech recognition...');
             this.accumulatedTranscript = ''; // Reset accumulated transcript when starting fresh
@@ -606,32 +661,146 @@ class InterviewChat {
             }
         }
     }
+
+    startListening() {
+        if (!this.speechSupported || !this.recognition || this.isListening) return;
+        this.accumulatedTranscript = '';
+        try {
+            this.recognition.start();
+        } catch (e) {
+            console.log('Recognition start error:', e);
+        }
+    }
+
+    stopListening() {
+        if (!this.isListening) return;
+        this.isListening = false;
+        try { this.recognition.stop(); } catch (e) { /* ignore */ }
+        this.stopAudioRecording();
+        this.speechStatus.classList.add('hidden');
+        this.micButton.style.background = '';
+        this.micButton.title = 'Voice input';
+        this.applyFocusModeWhileListening(false);
+    }
+
+    isFocusModeActive() {
+        return this.focusModeToggle && this.focusModeToggle.checked;
+    }
+
+    applyFocusModeWhileListening(entering) {
+        if (!this.focusModeToggle || !this.chatFocusableElements || !this.chatFocusableElements.length) return;
+        if (!this.isFocusModeActive()) {
+            this.chatFocusableElements.forEach(el => el.classList.remove('focus-mode-hidden'));
+            this.messageInput.placeholder = 'Type your response or use microphone...';
+            if (!entering && this.accumulatedTranscript) {
+                this.messageInput.value = this.accumulatedTranscript;
+                this.messageInput.style.height = 'auto';
+                this.messageInput.style.height = this.messageInput.scrollHeight + 'px';
+            }
+            return;
+        }
+        if (entering && this.isListening) {
+            this.chatFocusableElements.forEach(el => el.classList.add('focus-mode-hidden'));
+            this.messageInput.placeholder = 'Recording... Click mic to stop';
+            this.messageInput.value = '';
+        } else if (!entering) {
+            this.chatFocusableElements.forEach(el => el.classList.remove('focus-mode-hidden'));
+            this.messageInput.placeholder = 'Type your response or use microphone...';
+            this.messageInput.value = this.accumulatedTranscript;
+            this.messageInput.style.height = 'auto';
+            this.messageInput.style.height = this.messageInput.scrollHeight + 'px';
+        }
+    }
     
-    // Audio Recording Methods for Whisper
+    // Conversation Mode Methods
+    toggleConversationMode() {
+        this.conversationModeActive = !this.conversationModeActive;
+        const btn = document.getElementById('conversation-mode-btn');
+        if (btn) {
+            btn.classList.toggle('active', this.conversationModeActive);
+            btn.title = this.conversationModeActive
+                ? 'Conversation mode ON (click to disable)'
+                : 'Enable conversation mode (hands-free)';
+        }
+
+        if (this.conversationModeActive) {
+            if (!this.isListening) this.startListening();
+        } else {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+        }
+    }
+
+    async autoSendConversationTurn() {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = null;
+
+        const transcript = this.accumulatedTranscript.trim();
+        if (!transcript) return;
+
+        // Capture audio chunks before stopping (stopListening resets them on next start)
+        const chunksForRefinement = [...this.audioChunks];
+
+        // Stop mic while AI responds
+        this.stopListening();
+
+        // Send transcript immediately for fast UX
+        this.messageInput.value = transcript;
+        this.sendMessage(); // resets accumulatedTranscript and disables input
+
+        // Background Scribe refinement
+        if (this.elevenLabsTtsAvailable && chunksForRefinement.length > 0) {
+            this.refineTranscriptWithScribe(chunksForRefinement);
+        }
+    }
+
+    async refineTranscriptWithScribe(chunks) {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('audio_file', blob, 'recording.webm');
+        formData.append('session_id', this.sessionId);
+
+        try {
+            const resp = await fetch('/api/elevenlabs-transcribe', { method: 'POST', body: formData });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const refined = data.transcript?.trim();
+            if (refined) {
+                const userBubbles = document.querySelectorAll('.message-user .message-content');
+                if (userBubbles.length > 0) {
+                    userBubbles[userBubbles.length - 1].textContent = refined;
+                }
+            }
+        } catch (e) {
+            console.warn('Scribe refinement failed:', e);
+        }
+    }
+
+    // Audio Recording Methods for ElevenLabs Scribe
     async setupAudioRecording() {
-        console.log('Setting up audio recording for Whisper...');
-        
+        console.log('Setting up audio recording for ElevenLabs Scribe...');
+
         // Check if MediaRecorder is supported
         if (!window.MediaRecorder) {
-            console.warn('MediaRecorder not supported, Whisper functionality disabled');
+            console.warn('MediaRecorder not supported, Deepgram functionality disabled');
             this.hideWhisperButton('MediaRecorder not supported in this browser');
             return;
         }
-        
-        // Check if Whisper API is available
+
+        // Check if ElevenLabs API is available (shared key for STT + TTS)
         try {
-            const response = await fetch('/api/whisper-available');
+            const response = await fetch('/api/elevenlabs-available');
             const data = await response.json();
-            
+
             if (data.available) {
-                console.log('Whisper transcription available');
+                console.log('ElevenLabs transcription available');
                 this.enableWhisperButton();
             } else {
-                console.log('Whisper not available:', data.reason);
-                this.hideWhisperButton('Whisper requires OpenAI API key');
+                console.log('ElevenLabs not available:', data.reason);
+                this.hideWhisperButton('ElevenLabs requires API key');
             }
         } catch (error) {
-            console.error('Error checking Whisper availability:', error);
+            console.error('Error checking ElevenLabs availability:', error);
             this.hideWhisperButton('Unable to connect to transcription service');
         }
     }
@@ -656,6 +825,7 @@ class InterviewChat {
                 
                 this.mediaRecorder.start(100); // Collect data every 100ms
                 this.isRecording = true;
+                this.recordingStartTime = Date.now();
                 console.log('Audio recording started');
             })
             .catch(error => {
@@ -675,7 +845,11 @@ class InterviewChat {
         return new Promise((resolve) => {
             const cleanup = () => {
                 this.isRecording = false;
-                
+                if (this.recordingStartTime) {
+                    this.totalRecordingSeconds += (Date.now() - this.recordingStartTime) / 1000;
+                    this.recordingStartTime = null;
+                }
+
                 // Stop all tracks to release microphone
                 if (this.mediaRecorder && this.mediaRecorder.stream) {
                     this.mediaRecorder.stream.getTracks().forEach(track => {
@@ -723,58 +897,58 @@ class InterviewChat {
             alert('No audio recorded. Please use the microphone to record speech first.');
             return;
         }
-        
-        console.log('Transcribing with Whisper...');
-        
+
+        console.log('Transcribing with ElevenLabs Scribe...');
+
         try {
             // Update button state
             this.whisperButton.classList.add('processing');
             this.whisperButton.disabled = true;
-            this.whisperButton.title = 'Processing with Whisper...';
-            
+            this.whisperButton.title = 'Processing with ElevenLabs Scribe...';
+
             // Create audio blob from recorded chunks
             const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-            
+
             // Create form data
             const formData = new FormData();
             formData.append('audio_file', audioBlob, 'recording.webm');
             formData.append('session_id', this.sessionId);
-            
-            // Send to Whisper API
-            const response = await fetch('/api/whisper-transcribe', {
+
+            // Send to ElevenLabs Scribe API
+            const response = await fetch('/api/elevenlabs-transcribe', {
                 method: 'POST',
                 body: formData
             });
-            
+
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.detail || 'Transcription failed');
             }
-            
+
             const data = await response.json();
-            
+
             if (data.success && data.transcript) {
-                // Replace the current text with Whisper's more accurate transcription
+                // Replace the current text with Deepgram's more accurate transcription
                 this.messageInput.value = data.transcript;
                 this.accumulatedTranscript = data.transcript;
-                
+
                 // Auto-resize textarea
                 this.messageInput.style.height = 'auto';
                 this.messageInput.style.height = this.messageInput.scrollHeight + 'px';
-                
-                console.log('Whisper transcription successful:', data.transcript);
+
+                console.log('ElevenLabs transcription successful:', data.transcript);
             } else {
                 throw new Error('No transcript received');
             }
-            
+
         } catch (error) {
-            console.error('Whisper transcription error:', error);
-            alert(`Whisper transcription failed: ${error.message}`);
+            console.error('ElevenLabs transcription error:', error);
+            alert(`ElevenLabs transcription failed: ${error.message}`);
         } finally {
             // Reset button state
             this.whisperButton.classList.remove('processing');
             this.whisperButton.disabled = false;
-            this.whisperButton.title = 'Refine with Whisper (High Accuracy)';
+            this.whisperButton.title = 'Refine with ElevenLabs Scribe (High Accuracy)';
         }
     }
     
@@ -782,7 +956,7 @@ class InterviewChat {
         if (this.whisperButton && this.isConnected) {
             this.whisperButton.disabled = false;
             this.whisperButton.style.display = '';
-            this.whisperButton.title = 'Refine with Whisper (High Accuracy)';
+            this.whisperButton.title = 'Refine with ElevenLabs Scribe (High Accuracy)';
         }
     }
     
@@ -799,9 +973,9 @@ class InterviewChat {
             console.log('Whisper button hidden:', reason);
         }
         
-        // Show helpful message if it's about missing OpenAI key
+        // Show helpful message if API key is missing
         const whisperInfo = document.getElementById('whisper-info');
-        if (whisperInfo && reason && reason.includes('OpenAI')) {
+        if (whisperInfo && reason && reason.includes('API key')) {
             whisperInfo.classList.remove('hidden');
         }
     }
@@ -823,14 +997,14 @@ class InterviewChat {
         // Setup voice control event listeners
         this.setupVoiceEventListeners();
         
-        // Check if OpenAI TTS is available
+        // Check if ElevenLabs TTS is available
         try {
-            const response = await fetch('/api/whisper-available'); // Reuse this endpoint
+            const response = await fetch('/api/elevenlabs-available');
             const data = await response.json();
-            this.openaiTtsAvailable = data.available;
-            
-            if (this.openaiTtsAvailable) {
-                console.log('Premium TTS (OpenAI) available');
+            this.elevenLabsTtsAvailable = data.available;
+
+            if (this.elevenLabsTtsAvailable) {
+                console.log('Premium TTS (ElevenLabs) available');
             } else {
                 console.log('Using browser TTS only');
             }
@@ -897,6 +1071,15 @@ class InterviewChat {
                 }
             });
         }
+
+        // Focus mode: when unchecked while listening, show chat and live transcript
+        if (this.focusModeToggle) {
+            this.focusModeToggle.addEventListener('change', () => {
+                if (!this.focusModeToggle.checked && this.isListening) {
+                    this.applyFocusModeWhileListening(false);
+                }
+            });
+        }
     }
     
     async speakText(text) {
@@ -910,15 +1093,15 @@ class InterviewChat {
         // Clean the text (remove markdown, etc.)
         const cleanText = this.cleanTextForSpeech(text);
         
-        // Try OpenAI TTS first if available and enabled
-        if (this.openaiTtsAvailable && this.ttsEnabled) {
+        // Try ElevenLabs TTS first if available and enabled
+        if (this.elevenLabsTtsAvailable && this.ttsEnabled) {
             try {
-                const result = await this.speakWithOpenAI(cleanText);
+                const result = await this.speakWithElevenLabs(cleanText);
                 if (result && !result.disabled) {
-                    return; // Successfully used OpenAI TTS
+                    return; // Successfully used ElevenLabs TTS
                 }
             } catch (error) {
-                console.warn('OpenAI TTS failed, falling back to browser TTS:', error);
+                console.warn('ElevenLabs TTS failed, falling back to browser TTS:', error);
             }
         }
         
@@ -926,7 +1109,7 @@ class InterviewChat {
         this.speakWithBrowser(cleanText);
     }
     
-    async speakWithOpenAI(text) {
+    async speakWithElevenLabs(text) {
         try {
             const response = await fetch('/api/tts-synthesize', {
                 method: 'POST',
@@ -948,7 +1131,7 @@ class InterviewChat {
             if (contentType && contentType.includes('application/json')) {
                 const result = await response.json();
                 if (result.disabled) {
-                    console.log('TTS disabled, skipping OpenAI synthesis');
+                    console.log('TTS disabled, skipping ElevenLabs synthesis');
                     return { disabled: true };
                 }
             }
@@ -972,12 +1155,15 @@ class InterviewChat {
                 if (this.currentSpeech === audio) {
                     this.currentSpeech = null;
                 }
+                if (this.conversationModeActive && !this.isListening) {
+                    setTimeout(() => this.startListening(), 400);
+                }
             });
             
             return { disabled: false };
             
         } catch (error) {
-            console.error('OpenAI TTS error:', error);
+            console.error('ElevenLabs TTS error:', error);
             throw error;
         }
     }
@@ -1012,6 +1198,9 @@ class InterviewChat {
             if (this.currentSpeech === utterance) {
                 this.currentSpeech = null;
             }
+            if (this.conversationModeActive && !this.isListening) {
+                setTimeout(() => this.startListening(), 400);
+            }
         });
         
         utterance.addEventListener('error', (e) => {
@@ -1027,7 +1216,7 @@ class InterviewChat {
     stopSpeech() {
         if (this.currentSpeech) {
             if (this.currentSpeech instanceof Audio) {
-                // OpenAI TTS audio
+                // ElevenLabs TTS audio
                 this.currentSpeech.pause();
                 this.currentSpeech.currentTime = 0;
             } else {

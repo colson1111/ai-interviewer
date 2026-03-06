@@ -3,7 +3,6 @@
 
 from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.openai import OpenAIModel
 
 from ..config import LLMConfig
 from ..core import AgentCapability, AgentMessage, AgentResponse, InterviewContext
@@ -30,9 +29,7 @@ class SearchAgent(BaseInterviewAgent):
         )
 
         # Initialize the LLM model
-        if llm_config.provider.value == "openai":
-            model = OpenAIModel(llm_config.model)
-        elif llm_config.provider.value == "anthropic":
+        if llm_config.provider.value == "anthropic":
             model = AnthropicModel(llm_config.model)
         else:
             raise ValueError(f"Unsupported provider: {llm_config.provider}")

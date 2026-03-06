@@ -551,6 +551,67 @@ class TestBuildInitialContext:
 
         assert "markdown" in context.lower()
 
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_custom_context_includes_plan(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that custom initial context includes the interview plan."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig(interview_type=InterviewType.CUSTOM)
+        agent = InterviewAgent(llm_config, interview_config)
+
+        deps = InterviewDeps(
+            interview_type="custom",
+            tone="professional",
+            difficulty="medium",
+            company_name="TestCorp",
+            role_title="Data Scientist",
+            resume_summary="5 years Python",
+            jd_summary="ML engineer role",
+            custom_instructions=None,
+            conversation_history=[],
+            current_phase="introduction",
+            custom_interview_plan="Focus on metrics and A/B testing. Probe product thinking.",
+        )
+
+        context = agent._build_initial_context(deps)
+
+        assert "CUSTOM" in context
+        assert "INTERVIEW PLAN" in context
+        assert "Focus on metrics" in context
+        assert "A/B testing" in context
+        assert "TestCorp" in context
+
+    @patch("interviewer.agents.interview.OpenAIModel")
+    @patch("interviewer.agents.interview.Agent")
+    def test_custom_context_without_plan_fallback(
+        self, mock_agent_class, mock_openai_model
+    ):
+        """Test that custom with no plan falls back to generic opening."""
+        llm_config = LLMConfig(provider=LLMProvider.OPENAI)
+        interview_config = InterviewConfig(interview_type=InterviewType.CUSTOM)
+        agent = InterviewAgent(llm_config, interview_config)
+
+        deps = InterviewDeps(
+            interview_type="custom",
+            tone="professional",
+            difficulty="medium",
+            company_name=None,
+            role_title=None,
+            resume_summary=None,
+            jd_summary=None,
+            custom_instructions=None,
+            conversation_history=[],
+            current_phase="introduction",
+            custom_interview_plan=None,
+        )
+
+        context = agent._build_initial_context(deps)
+
+        assert "CUSTOM" in context
+        assert "opening question" in context.lower()
+
 
 # ============================================================================
 # Test _generate_case_study_hint Method

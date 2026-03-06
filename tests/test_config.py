@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from interviewer.config import (
     DEFAULT_MODELS,
+    MAX_RECORDING_MINUTES,
     PROVIDER_MODELS,
     Difficulty,
     InterviewConfig,
@@ -129,6 +130,15 @@ class TestInterviewConfig:
         assert config.interview_type == InterviewType.CASE_STUDY
         assert config.tone == Tone.CHALLENGING
         assert config.difficulty == Difficulty.HARD
+
+    def test_custom_config(self):
+        """Test custom interview configuration."""
+        config = InterviewConfig(interview_type=InterviewType.CUSTOM)
+        assert config.interview_type == InterviewType.CUSTOM
+
+    def test_max_recording_minutes(self):
+        """Test MAX_RECORDING_MINUTES constant."""
+        assert MAX_RECORDING_MINUTES == 20
 
 
 class TestProviderModels:

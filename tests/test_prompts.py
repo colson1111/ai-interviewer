@@ -7,6 +7,7 @@ Tests prompt building and component assembly.
 
 from interviewer.prompts import (
     BASE_PROMPT,
+    CUSTOM_INTERVIEW_EXPANSION_PROMPT,
     DIFFICULTY_MODIFIERS,
     EVALUATION_PROMPT,
     INTERVIEW_TYPE_GUIDANCE,
@@ -52,10 +53,16 @@ class TestPromptConstants:
 
     def test_interview_type_guidance_all_defined(self):
         """Test that all interview type guidance is defined."""
-        expected_types = ["behavioral", "case_study"]
+        expected_types = ["behavioral", "case_study", "custom"]
         for interview_type in expected_types:
             assert interview_type in INTERVIEW_TYPE_GUIDANCE
             assert len(INTERVIEW_TYPE_GUIDANCE[interview_type]) > 0
+
+    def test_custom_guidance_mentions_plan(self):
+        """Test that custom guidance mentions following the plan."""
+        guidance = INTERVIEW_TYPE_GUIDANCE["custom"].lower()
+        assert "custom" in guidance
+        assert "plan" in guidance
 
     def test_behavioral_guidance_contains_star(self):
         """Test that behavioral guidance mentions STAR method."""
@@ -91,6 +98,12 @@ class TestPromptConstants:
         """Test that base prompt mentions text-to-speech / spoken language."""
         lower = BASE_PROMPT.lower()
         assert "spoken" in lower or "text-to-speech" in lower
+
+    def test_custom_expansion_prompt_exists(self):
+        """Test that custom interview expansion prompt is defined."""
+        assert CUSTOM_INTERVIEW_EXPANSION_PROMPT is not None
+        assert len(CUSTOM_INTERVIEW_EXPANSION_PROMPT) > 0
+        assert "interviewer" in CUSTOM_INTERVIEW_EXPANSION_PROMPT.lower()
 
     def test_evaluation_prompt_exists(self):
         """Test that evaluation prompt is defined."""
@@ -151,11 +164,19 @@ class TestBuildSystemPrompt:
         # Should contain behavioral interview markers
         assert "STAR" in prompt or "Behavioral" in prompt
 
+    def test_build_prompt_custom_type(self):
+        """Test that custom interview type produces valid prompt."""
+        prompt = build_system_prompt(
+            interview_type="custom", tone="professional", difficulty="medium"
+        )
+        assert "custom" in prompt.lower()
+        assert "plan" in prompt.lower()
+
     def test_build_prompt_all_combinations(self):
         """Test that all valid combinations produce valid prompts."""
         tones = ["professional", "friendly", "challenging", "supportive"]
         difficulties = ["easy", "medium", "hard"]
-        interview_types = ["behavioral", "case_study"]
+        interview_types = ["behavioral", "case_study", "custom"]
 
         for tone in tones:
             for difficulty in difficulties:

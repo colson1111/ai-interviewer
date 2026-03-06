@@ -30,16 +30,13 @@ class CostTracker:
     calls: List[APICall] = field(default_factory=list)
     start_time: datetime = field(default_factory=datetime.now)
 
-    # Current pricing (as of 2024 - these should be updated periodically)
+    # Current pricing (as of 2025 - these should be updated periodically)
     PRICING = {
         "openai": {
             "gpt-4o": {"input": 0.0025, "output": 0.01},  # per 1K tokens
             "gpt-4": {"input": 0.03, "output": 0.06},  # per 1K tokens
             "gpt-4-turbo": {"input": 0.01, "output": 0.03},  # per 1K tokens
             "gpt-3.5-turbo": {"input": 0.001, "output": 0.002},  # per 1K tokens
-            "whisper-1": 0.006,  # per minute
-            "tts-1": 0.015,  # per 1K characters
-            "tts-1-hd": 0.030,  # per 1K characters
         },
         "anthropic": {
             "claude-3-5-sonnet-20241022": {
@@ -74,29 +71,31 @@ class CostTracker:
         self.calls.append(call)
         return cost
 
-    def add_whisper_call(self, audio_seconds: float) -> float:
-        """Add a Whisper transcription call and return estimated cost."""
+    def add_elevenlabs_stt_call(self, audio_seconds: float) -> float:
+        """Add an ElevenLabs Scribe STT call and return estimated cost."""
+        # ElevenLabs Scribe v1: $0.40 per hour = ~$0.0067 per minute
         audio_minutes = audio_seconds / 60
-        cost = audio_minutes * self.PRICING["openai"]["whisper-1"]
+        cost = audio_minutes * 0.0067
 
         call = APICall(
             timestamp=datetime.now(),
-            provider="openai",
-            service="whisper-1",
+            provider="elevenlabs",
+            service="scribe_v1",
             audio_seconds=audio_seconds,
             cost_usd=cost,
         )
         self.calls.append(call)
         return cost
 
-    def add_tts_call(self, characters: int, model: str = "tts-1") -> float:
-        """Add a TTS synthesis call and return estimated cost."""
-        cost = (characters / 1000) * self.PRICING["openai"][model]
+    def add_elevenlabs_call(self, characters: int) -> float:
+        """Add an ElevenLabs TTS call and return estimated cost."""
+        # ElevenLabs Turbo v2.5: ~$0.11 per 1K characters
+        cost = (characters / 1000) * 0.11
 
         call = APICall(
             timestamp=datetime.now(),
-            provider="openai",
-            service=model,
+            provider="elevenlabs",
+            service="eleven_turbo_v2_5",
             characters=characters,
             cost_usd=cost,
         )
